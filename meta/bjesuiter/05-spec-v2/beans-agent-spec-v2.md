@@ -557,9 +557,13 @@ Examples of `Purpose`:
 
 Rules:
 
-- this interface is optional and separate from `Driver`
+- this interface is optional and separate from the `LiveSession` API
+- it may still be implemented by, or backed by, the same driver/runtime adapter
 - it is for one-off helper calls, not durable session state
+- utility calls may ask the driver/runtime directly to do small jobs such as generating a workspace or session name from the first user message
+- this allows Beans to reuse the user's existing runtime subscription/payment path instead of requiring a separate model provider for helper features
 - Beans may use the same runtime family for both live sessions and helper calls, but the abstractions stay separate
+- utility calls should not implicitly create durable chat history unless Beans explicitly chooses to persist the result
 
 ---
 

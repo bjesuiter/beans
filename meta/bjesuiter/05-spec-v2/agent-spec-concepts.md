@@ -298,15 +298,35 @@ So the model is:
 
 A **utility provider** handles one-off non-session calls.
 
-Current example:
+Current examples:
 
 - generate a short workspace description from the first user message
+- generate a short session/workspace name from the first user message
 
 This is intentionally outside the live session API because it is not:
 
 - a persistent conversation
 - a streamed turn
 - part of durable chat state
+
+At the same time, a utility provider does **not** have to mean a completely separate model vendor or billing path.
+
+A utility provider may ask the same underlying driver/runtime directly to do a small piece of work.
+For example:
+
+- a Claude-backed utility provider can ask the Claude-side adapter to generate a session name
+- a pi-backed utility provider can ask the pi-side adapter to generate a workspace description
+
+Why this matters:
+
+- Beans can reuse the user's existing subscription/payment path
+- helper features do not need a separate paid provider just to generate short metadata
+- the abstraction still stays clean because the call is outside `LiveSession`, even if it is backed by the same runtime family
+
+So the right distinction is:
+
+- **separate from the live session abstraction**
+- but **not necessarily separate from the driver/runtime implementation**
 
 The same runtime family might power both live sessions and utility calls, but they are different abstractions and should stay separate.
 
@@ -333,6 +353,7 @@ The same runtime family might power both live sessions and utility calls, but th
 - runtime-native resume payloads
 - runtime-native mode/action implementation details
 - host capability requirements
+- optional utility-call execution when Beans reuses the same runtime for helper tasks
 
 This is the main architectural point of the v2 spec.
 
