@@ -161,6 +161,30 @@ Examples:
 - `status`
 - `error`
 
+### Attachment frames
+
+An `attachment` frame should usually be understood as a **rich reference** to Beans-owned persisted data, not as the data blob itself.
+
+In practice that means an attachment frame points at something like:
+
+- an attachment ID
+- media type
+- file name
+- optional size or hash metadata
+- optionally a local storage path or other lookup handle
+
+So yes: conceptually, an attachment frame is usually a rich reference to data that Beans has already stored on disk or otherwise persisted.
+
+Why this is useful:
+
+- the message timeline stays lightweight
+- Beans can own storage, serving URLs, cleanup, and retention
+- different drivers can consume the same attachment through different delivery mechanisms
+- the abstract interface does not need to inline raw binary payloads into durable history
+
+The frame carries the reference semantics.
+Beans owns the underlying blob/file lifecycle.
+
 This is the key simplification.
 
 Instead of saying:
