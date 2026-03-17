@@ -28,6 +28,20 @@ The goal is to summarize the first user message into a compact label for the wor
 
 Any attempt to replace the current Claude integration has to remember that Beans does not only use Claude for chat. It also uses Claude as a lightweight metadata generator.
 
+## Flow diagram
+
+```mermaid
+flowchart TD
+    F[First user message in worktree chat] --> C{Description already set?}
+    C -->|No| H[Call agent.GenerateDescription]
+    H --> P[Spawn 'claude --print --model haiku']
+    P --> I[Send summarization prompt via stdin]
+    I --> O[Claude returns short description]
+    O --> T[Trim/unquote output]
+    T --> W[Write description to worktree metadata]
+    C -->|Yes| N[Skip generation]
+```
+
 ## Relevant files
 
 - `internal/commands/serve.go`

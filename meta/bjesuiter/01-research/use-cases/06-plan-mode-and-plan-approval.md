@@ -60,6 +60,22 @@ The ordering matters because the resumed Claude process must start with the act-
 
 This is not just runtime coupling. The session model, GraphQL mutations, and frontend controls are all designed around Claude's plan/act workflow.
 
+## Flow diagram
+
+```mermaid
+flowchart TD
+    A[Claude running] --> E{Mode tool invoked?}
+    E -->|EnterPlanMode| EP[Set PlanMode=true and ActMode=false]
+    EP --> ER[Stop process and respawn with --permission-mode plan]
+    ER --> EY[Send 'yes, proceed']
+    E -->|ExitPlanMode| XP[Create pending exit_plan interaction]
+    XP --> PF[Read ~/.claude/plans/*.md or fallback message]
+    PF --> UI[Show plan approval UI]
+    UI --> AP[Frontend sets plan=false then act=true]
+    AP --> MSG[Send 'yes, proceed']
+    MSG --> RR[Respawn/resume Claude in act mode]
+```
+
 ## Relevant files
 
 - `internal/agent/claude.go`

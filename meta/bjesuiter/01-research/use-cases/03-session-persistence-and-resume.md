@@ -44,6 +44,21 @@ This is a core Claude-backed use-case because the current implementation depends
 
 `Manager.Shutdown()` kills all running Claude processes concurrently, but the persistence model is still based on Claude-compatible resume state.
 
+## Flow diagram
+
+```mermaid
+flowchart TD
+    A[User/agent turn] --> J[Append messages to .beans/.conversations/<beanID>.jsonl]
+    J --> R[Claude emits result with session_id]
+    R --> M[Persist meta entry with SessionID]
+    M --> N[Later message or mode restart]
+    N --> X{SessionID present?}
+    X -->|Yes| C[Respawn claude with --resume <sessionID>]
+    X -->|No| F[Start fresh Claude session]
+    C --> H[Conversation context continues]
+    F --> H
+```
+
 ## Relevant files
 
 - `internal/agent/manager.go`

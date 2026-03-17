@@ -31,6 +31,19 @@ Compaction has a Beans-specific follow-up behavior:
 
 So the user-visible compact action is part Claude behavior and part Beans persistence hygiene.
 
+## Flow diagram
+
+```mermaid
+flowchart TD
+    U[User clicks Compact] --> M[Frontend sends '/compact' as message]
+    M --> P[Beans persists user turn]
+    P --> C[Claude receives /compact via stream-json stdin]
+    C --> R[Claude finishes compaction turn]
+    R --> K{Last user message was /compact?}
+    K -->|Yes| A[Prune orphaned attachment files]
+    K -->|No| N[No extra cleanup]
+```
+
 ## Relevant files
 
 - `frontend/src/lib/components/AgentChat.svelte`

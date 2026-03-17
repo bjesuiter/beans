@@ -66,6 +66,20 @@ When images are attached, Beans switches to Anthropic-style content blocks and b
 - max attachment size: 5 MB
 - attachments are later served back to the frontend from `/api/attachments/<beanID>/<imageID>`
 
+## Flow diagram
+
+```mermaid
+flowchart TD
+    U[User sends text/images] --> G[sendAgentMessage]
+    G --> A[Save attachments to .beans/.conversations/attachments]
+    A --> S[Append user message to session and JSONL]
+    S --> F{Claude process running?}
+    F -->|Yes| I[Write stream-json user message to stdin]
+    F -->|No| C[Spawn claude and send initial message]
+    I --> P[Claude receives text or text+image blocks]
+    C --> P
+```
+
 ## Relevant files
 
 - `internal/agent/manager.go`

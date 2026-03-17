@@ -43,6 +43,20 @@ While Claude is working, Beans derives additional UI data from Claude tool input
 
 That means the worktree coding experience depends not just on Claude text output, but on Claude's tool stream structure.
 
+## Flow diagram
+
+```mermaid
+flowchart TD
+    U[User opens worktree chat] --> G[sendAgentMessage / agentSessionChanged]
+    G --> S[Beans session for bean/worktree]
+    S --> W[Resolve worktree path and prompts]
+    W --> C[Spawn claude CLI with cmd.Dir = worktree]
+    C --> T[Claude emits text, tool, status, task_progress]
+    T --> P[Beans parses stream-json events]
+    P --> D[Derive tool summaries, diffs, plan data]
+    D --> UI[Publish updated session to UI]
+```
+
 ## Relevant files
 
 - `internal/commands/serve.go`

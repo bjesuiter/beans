@@ -43,6 +43,20 @@ and returns the session to idle.
 
 This is another place where generic API naming hides Claude-specific semantics. The UI looks generic, but the live activity feed is built from Claude event types and Claude progress payloads.
 
+## Flow diagram
+
+```mermaid
+flowchart TD
+    C[Claude emits system event] --> T{Subtype?}
+    T -->|status| S[Store Session.SystemStatus]
+    T -->|task_progress| P[Update SubagentActivity by task_id]
+    S --> G[Expose via GraphQL]
+    P --> G
+    G --> UI[Render live status and subagent rows]
+    C --> R[Claude emits final result]
+    R --> X[Clear system status and subagent activities]
+```
+
 ## Relevant files
 
 - `internal/agent/parse.go`

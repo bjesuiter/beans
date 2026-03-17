@@ -38,6 +38,22 @@ It is not meant to implement bean work directly. Instead, it helps the user:
 
 The central agent is different from worktree agents because it is a coordination surface, not a coding surface. Its Claude prompt and allowed behavior are specialized for planning.
 
+## Flow diagram
+
+```mermaid
+flowchart TD
+    U[User in web UI] --> G[GraphQL agent API]
+    G --> S[Beans session for __central__]
+    S --> P[Add central planning prompt]
+    P --> C[Spawn claude CLI in main repo]
+    C --> O[Claude stream-json output]
+    O --> M[Beans parses and materializes session state]
+    M --> UI[UI subscription updates]
+    C --> Q{Needs user input?}
+    Q -->|AskUserQuestion| I[Beans creates pending interaction]
+    I --> U
+```
+
 ## Relevant files
 
 - `internal/commands/serve.go`

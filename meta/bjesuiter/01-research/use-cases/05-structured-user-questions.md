@@ -47,6 +47,20 @@ There is no separate "answer interaction" RPC.
 
 This is one of the clearest examples where the UI contract is Claude-shaped. The backend and frontend are both expecting a specific Claude tool and a specific tool-input schema.
 
+## Flow diagram
+
+```mermaid
+flowchart TD
+    C[Claude invokes AskUserQuestion] --> B[Beans buffers streamed tool input]
+    B --> P[Parse structured questions/options]
+    P --> I[Set PendingInteraction = ask_user]
+    I --> S[Stop Claude process but keep session resumable]
+    S --> U[Frontend renders question UI]
+    U --> R[User picks option or types reply]
+    R --> G[sendAgentMessage]
+    G --> X[Resume Claude conversation]
+```
+
 ## Relevant files
 
 - `internal/agent/claude.go`
