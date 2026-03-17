@@ -7,17 +7,18 @@ Goals:
 - one internal abstraction for Claude, pi RPC, Codex MCP, ACP/OpenCode
 - one UI-facing session model
 - interactions are session state, not host callbacks
-- ACP-style host execution needs are optional and backend-only
+- ACP-style host execution needs stay optional and backend-only
 
 ---
 
 ## 1. Design rules
 
-1. Beans owns the **session model**.
+1. Beans owns the session model.
 2. Drivers adapt external protocols into Beans events.
 3. The UI talks only to Beans session state.
 4. User interactions are emitted as session events/state and answered later.
 5. Host execution requirements are optional and driver-specific.
+6. The core should model what Beans already uses today; richer features can be added later.
 
 ---
 
@@ -32,18 +33,22 @@ type Driver interface {
 }
 
 type LiveSession interface {
-    Info() SessionRuntimeInfo
     Events() <-chan Event
 
     Send(ctx context.Context, input UserInput, opts SendOptions) error
     Cancel(ctx context.Context) error
     SetMode(ctx context.Context, modeID string) error
     Respond(ctx context.Context, requestID string, reply InteractionReply) error
-    Invoke(ctx context.Context, action ActionInvocation) (ActionResult, error)
 
     Close(ctx context.Context) error
 }
 ```
+
+Notes:
+
+- `SetMode` may be unsupported by a driver.
+- `Respond` is for pending interaction requests.
+- Operational extras like compaction/model switching are **not** core yet.
 
 ---
 
@@ -53,9 +58,7 @@ type LiveSession interface {
 type OpenSessionRequest struct {
     BeansSessionID string
     WorkingDir     string
-    Provider       ProviderRef
     InitialModeID  string // default: "act"
-    MCPServers     []MCPServerConfig
     Context        []ContentBlock
     Meta           map[string]any
 }
@@ -63,7 +66,6 @@ type OpenSessionRequest struct {
 type ResumeSessionRequest struct {
     BeansSessionID string
     WorkingDir     string
-    Provider       ProviderRef
     Resume         ResumeState
     Meta           map[string]any
 }
@@ -94,21 +96,15 @@ type SessionState struct {
     WorkDir         string
 
     Capabilities    SessionCapabilities
-    RuntimeCaps     RuntimeCapabilities
-
     CurrentModeID   string
     AvailableModes  []Mode
 
     Messages        []Message
     ToolCalls       []ToolCall
-    Plan            *Plan
     PendingRequests []InteractionRequest
-    Commands        []CommandDescriptor
 
     StatusText      string
     LastError       string
-
-    Runtime         RuntimeState
     Resume          *ResumeState
 }
 ```
@@ -117,25 +113,20 @@ Notes:
 
 - `CurrentModeID` replaces `planMode` / `actMode`
 - `PendingRequests` replaces Claude-specific pending interaction state
-- `ToolCalls` are first-class, not just chat messages
+- `ToolCalls` stay in the spec because current Beans already surfaces tool-like activity, diffs, and progress; if needed, this can still be omitted in an initial implementation and added right after
 
 ---
 
-## 5. Event model
+## 5. Minimal event model
 
 Drivers emit normalized events; Beans reduces them into `SessionState`.
 
-Recommended events:
+Core events:
 
-- `SessionOpened`
-- `SessionResumed`
-- `SessionStatusChanged`
 - `ResumeStateUpdated`
+- `SessionStatusChanged`
 - `ModesUpdated`
-- `CurrentModeChanged`
-- `CommandsUpdated`
 - `StatusTextUpdated`
-- `PlanUpdated`
 - `MessageStarted`
 - `MessageDelta`
 - `MessageCompleted`
@@ -144,9 +135,10 @@ Recommended events:
 - `ToolCallCompleted`
 - `InteractionRequested`
 - `InteractionResolved`
-- `RuntimeUpdated`
 - `ErrorEvent`
 - `SessionEnded`
+
+Everything else should be added only when a real driver needs it.
 
 ---
 
@@ -160,28 +152,8 @@ type SessionCapabilities struct {
     SetMode     bool
     CancelTurn  bool
     SendImages  bool
-    Commands    bool
-    Plans       bool
     ToolCalls   bool
     Interaction bool
-}
-```
-
-### Optional runtime capabilities
-
-```go
-type RuntimeCapabilities struct {
-    Steering       bool
-    FollowUpQueue  bool
-    Compact        bool
-    AutoCompact    bool
-    ModelSelection bool
-    ThinkingLevel  bool
-    SessionFork    bool
-    SessionSwitch  bool
-    SessionNaming  bool
-    ExportHTML     bool
-    BashCommand    bool
 }
 ```
 
@@ -246,22 +218,7 @@ This applies to pi RPC and Codex MCP.
 
 ---
 
-## 9. Commands vs actions
-
-- **commands**: user-invoked prompt-like commands
-- **actions**: direct operational controls
-
-Examples:
-
-- command: `/plan`
-- command: `/skill:foo`
-- action: `compact`
-- action: `setModel`
-- action: `setThinkingLevel`
-
----
-
-## 10. Driver mapping summary
+## 9. Driver mapping summary
 
 ### Claude
 - native session + streaming adapter
@@ -269,7 +226,7 @@ Examples:
 - no host requirements
 
 ### pi RPC
-- prompt/steer/follow_up mapping
+- prompt/steer/follow_up mapping can be added later as optional delivery behavior
 - always expose `act`
 - no host requirements
 
@@ -285,6 +242,18 @@ Examples:
 - may expose native modes
 - requires host capabilities for FS / terminal / permissions
 - permission requests still map into normal `InteractionRequested` state
+
+---
+
+## 10. Likely future extensions
+
+Add only when needed by a real driver/UI feature:
+
+- plans
+- commands
+- direct runtime actions (compact, set model, thinking level, etc.)
+- richer runtime capability objects
+- ACP-specific open/session config beyond `Meta`
 
 ---
 
