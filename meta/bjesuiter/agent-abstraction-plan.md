@@ -5,8 +5,9 @@ This is a first proposal for a **protocol-agnostic agent abstraction** in Beans 
 - `meta/docs/beans-claude/current-integration.md` — current Claude Code CLI integration
 - `meta/docs/acp/` — Agent Client Protocol
 - `meta/docs/pi-rcp/rpc.md` — pi RPC mode
+- `meta/docs/codex-mcp/mcp-server-exploration.md` — Codex MCP server as observed locally
 
-The goal is **not** to force all three protocols into one wire format.
+The goal is **not** to force all four protocols into one wire format.
 The goal is to define:
 
 1. a **single internal Go interface** that Beans can program against
@@ -27,7 +28,7 @@ My recommendation is:
 
 In short:
 
-> **Beans should not expose Claude, ACP, or pi-RPC directly.**
+> **Beans should not expose Claude, ACP, pi-RPC, or Codex MCP directly.**
 > It should expose a Beans-native agent session model that those protocols can map into.
 
 ---
@@ -827,6 +828,152 @@ This is why the host boundary must exist in the abstraction.
 
 pi has extra power. That is fine.
 Those features should show up as optional runtime capabilities and actions, not as core requirements for every driver.
+
+---
+
+## 12.4 Codex MCP adapter
+
+This one is slightly different from ACP.
+
+Even though the command is called `codex mcp-server`, the observed integration point is effectively:
+
+- one long-lived stdio JSONL JSON-RPC process
+- `initialize` / `notifications/initialized`
+- `tools/list`
+- `tools/call` for `codex` and `codex-reply`
+- streaming notifications via `codex/event`
+
+So in Beans terms, I would model this as a dedicated driver adapter, not as a generic ACP adapter.
+
+### Why not treat it as ACP?
+
+Because the current observed behavior is not the ACP session model.
+
+It does **not** expose:
+
+- ACP `session/new`
+- ACP `session/prompt`
+- ACP `session/update`
+- ACP `session/set_mode`
+- ACP permission / fs / terminal client callbacks
+
+Instead, it exposes a tool-oriented MCP server with a Codex-specific contract on top.
+
+### Open/resume
+
+- spawn one long-lived `codex mcp-server` process
+- on process startup: send `initialize`, then `notifications/initialized`
+- `Open()` -> `tools/call` with tool `codex`
+- `Resume()` within the same live process -> `tools/call` with tool `codex-reply` using stored `threadId`
+
+Important constraint:
+
+- `threadId` is only valid while the same `codex mcp-server` process remains alive
+- after process restart, old `threadId`s are not resumable
+
+So the adapter should advertise something like:
+
+- `Resume = true` for in-process/live-session continuation
+- but persistence across process restarts should be treated as **non-durable** unless Beans adds replay-based restoration
+
+In practice, I would persist both:
+
+- adapter resume state: `threadId`
+- canonical message history for possible future replay
+
+### Input mapping
+
+- `Send(IMMEDIATE)`:
+  - if no session exists yet -> `tools/call(name="codex")`
+  - else -> `tools/call(name="codex-reply")`
+- `Cancel()`:
+  - only if we discover a reliable cancellation mechanism later; for now assume unsupported unless proven otherwise
+- `SetMode()`:
+  - unsupported
+- runtime configuration for the initial session should map from `OpenSessionRequest.Meta` / provider config into `codex` tool args such as:
+  - `cwd`
+  - `sandbox`
+  - `approval-policy`
+  - `model`
+  - `profile`
+  - `developer-instructions`
+
+### Mode mapping
+
+Codex MCP does not expose a first-class mode model.
+
+So, same stance as pi:
+
+- `currentModeId = "act"`
+- `availableModes = [{ id: "act", name: "Act", description: "Default execution mode" }]`
+- `SetMode = false`
+
+### Output mapping
+
+Final authoritative result comes from the `tools/call` response:
+
+- `result.structuredContent.threadId` -> `ResumeStateUpdated`
+- `result.structuredContent.content` -> `MessageCompleted`
+- `result.isError === true` -> adapter-level error / failed turn state
+
+Streaming/progress should come from `codex/event` notifications:
+
+- `agent_message_delta` / `agent_message_content_delta` -> `MessageDelta`
+- `agent_message` -> `MessageCompleted` or final message reconciliation
+- `task_started` / `task_complete` -> session status/runtime progress events
+- `session_configured` -> runtime/config state update
+- `token_count` -> runtime usage update if we want to expose usage later
+
+There are also lower-level events like:
+
+- `raw_response_item`
+- `item_started`
+- `item_completed`
+- `user_message`
+- `mcp_startup_update`
+- `mcp_startup_complete`
+
+My recommendation is to keep the first adapter conservative:
+
+- map only clearly useful message/progress events into the canonical reducer
+- store the rest in provider metadata if needed
+- avoid overfitting the core model to Codex-specific event taxonomy
+
+### Capabilities mapping
+
+What Codex MCP appears to support well:
+
+- prompt turns
+- streaming text output
+- in-process session continuation via `threadId`
+
+What it does **not** appear to support directly in the current observed contract:
+
+- generic mode switching
+- Beans-hosted permission requests
+- Beans-hosted file system callbacks
+- Beans-hosted terminal callbacks
+- durable session resume across process restarts
+
+So I would initially advertise a narrower capability set than ACP/pi.
+
+### Persistence strategy
+
+This adapter is exactly why the abstraction needs to separate:
+
+1. canonical Beans history persistence
+2. adapter-native resume state
+
+Because Codex MCP's native resume handle (`threadId`) is ephemeral.
+
+If Beans later wants durable restoration for Codex MCP, the likely strategy is:
+
+- persist canonical conversation history
+- start a fresh `codex` session on restart
+- replay prior turns into that new session
+- capture the new `threadId`
+
+That replay logic belongs inside the Codex adapter, not the core API.
 
 ---
 
