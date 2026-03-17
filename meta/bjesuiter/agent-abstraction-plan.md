@@ -833,9 +833,7 @@ Those features should show up as optional runtime capabilities and actions, not 
 
 ## 12.4 Codex MCP adapter
 
-This one is slightly different from ACP.
-
-Even though the command is called `codex mcp-server`, the observed integration point is effectively:
+Observed integration point:
 
 - one long-lived stdio JSONL JSON-RPC process
 - `initialize` / `notifications/initialized`
@@ -843,21 +841,7 @@ Even though the command is called `codex mcp-server`, the observed integration p
 - `tools/call` for `codex` and `codex-reply`
 - streaming notifications via `codex/event`
 
-So in Beans terms, I would model this as a dedicated driver adapter, not as a generic ACP adapter.
-
-### Why not treat it as ACP?
-
-Because the current observed behavior is not the ACP session model.
-
-It does **not** expose:
-
-- ACP `session/new`
-- ACP `session/prompt`
-- ACP `session/update`
-- ACP `session/set_mode`
-- ACP permission / fs / terminal client callbacks
-
-Instead, it exposes a tool-oriented MCP server with a Codex-specific contract on top.
+In Beans terms, I would model this as a dedicated Codex MCP driver.
 
 ### Open/resume
 
