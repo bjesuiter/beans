@@ -1,16 +1,17 @@
 # Beans agent spec v2
 
-A minimal Beans-native API for integrating different coding agents.
+A minimal Beans-native agent abstraction built around **sessions, messages, and frames**.
 
-Companion note: see `./agent-spec-concepts.md` for the product-level concepts behind this API, including profiles, artifacts, actions, and the Beans-vs-driver layering rules.
+Companion note: see `./agent-spec-concepts.md` for the reduced concept model and the Beans-vs-driver layering rules.
 
-Goals:
+## Goals
 
-- one internal abstraction for Claude, pi RPC, Codex MCP, ACP/OpenCode
-- one UI-facing session model
-- interactions are session state, not host callbacks
-- planning/worktree policy stays Beans-owned instead of leaking into drivers
-- non-session helper calls stay possible without forcing them through the live chat model
+- keep the abstract API surface as small as possible
+- keep full expressability for Claude, pi, Codex, and ACP-style runtimes
+- persist a durable Beans-owned conversation timeline
+- support streaming output without exposing runtime-specific wire protocols
+- keep Beans product policy outside the driver interface
+- allow one-off helper calls to reuse the same runtime/subscription path when possible
 
 ---
 
@@ -20,13 +21,12 @@ Goals:
 flowchart TD
     UI[Web UI\nSvelte components + stores]
     GQL[GraphQL API\nqueries / mutations / subscriptions]
-    MGR[Beans agent manager\nsession store + reducer + pub/sub]
-    SPEC[Beans agent abstraction\nDriver / LiveSession / SessionState / Event]
-    CLAUDE[Claude driver]
-    PI[pi RPC driver]
-    CODEX[Codex MCP driver]
-    ACP[ACP / OpenCode driver]
-    UTIL[Optional utility provider\nworkspace descriptions / one-off text generation]
+    MGR[Beans agent manager\nsession reducer + persistence + pub/sub]
+    SPEC[Abstract agent\nAgent / Session / Message / Frame]
+    CLAUDE[Claude adapter]
+    PI[pi adapter]
+    CODEX[Codex adapter]
+    ACP[ACP / OpenCode adapter]
 
     UI --> GQL
     GQL --> MGR
@@ -35,623 +35,501 @@ flowchart TD
     SPEC --> PI
     SPEC --> CODEX
     SPEC --> ACP
-    MGR --> UTIL
 ```
 
 Reading it top to bottom:
 
-- the Web UI only knows the GraphQL session model
-- GraphQL talks to the Beans agent manager
-- the manager owns the canonical session state and reduces driver events into it
-- the abstraction is the boundary between Beans core and concrete agent runtimes
-- each concrete driver adapts one external protocol/runtime into the same Beans model
-- one-off helper calls like workspace description generation live beside the live-session API, not inside it
+- the UI knows only Beans session state
+- the manager owns canonical persistence and reduction
+- the abstract agent layer is intentionally small
+- each concrete runtime maps to the same message/frame model
 
 ---
 
 ## 1. Design rules
 
-1. Beans owns the session model.
-2. Drivers adapt external protocols into Beans events.
-3. The UI talks only to Beans session state and session actions.
-4. User interactions are emitted as session events/state and answered later.
-5. Host execution requirements are optional and driver-specific.
-6. Session purpose and prompt policy are Beans product logic above the driver boundary.
-7. Beans owns attachment persistence, artifact persistence, and cleanup rules.
-8. The core should model what Beans already uses today; richer features should only be added when a real use-case needs them.
-
-Rule 6 matters for the current `__central__` planner and worktree agents:
-
-- the abstraction should support those sessions cleanly
-- but it should **not** hard-code Beans planning policy into every driver
+1. Beans owns the durable session timeline.
+2. Drivers adapt runtime protocols into Beans messages and frames.
+3. The abstract interface should expose primitives, not product-specific workflows.
+4. Tool calls, interactions, mode changes, actions, and artifacts should be represented through message/frame semantics rather than separate top-level APIs.
+5. Resume data is driver-owned and opaque.
+6. Profiles, prompts, worktree rules, attachment storage, and cleanup stay Beans-owned.
+7. One-off helper calls should be possible without forcing them into the live-session model.
+8. Derived UI state is allowed above the abstraction, but the abstraction itself should stay small.
 
 ---
 
-## 2. Core interfaces
+## 2. Primitive model
+
+The core abstraction should have only these runtime primitives:
+
+- `Agent`
+- `Session`
+- `Message`
+- `Frame`
+- `ResumeToken`
+- optional `OneShotCall`
+
+Everything else is either:
+
+- a frame semantic
+- a Beans-owned policy
+- or a derived UI/persistence view
+
+---
+
+## 3. Core interfaces
 
 ```go
-type Driver interface {
+type Agent interface {
     Kind() string
-    HostCapabilityRequirements() HostCapabilityRequirements
-    Open(ctx context.Context, req OpenSessionRequest) (LiveSession, error)
-    Resume(ctx context.Context, req ResumeSessionRequest) (LiveSession, error)
+    Open(ctx context.Context, req OpenRequest) (Session, error)
+    Resume(ctx context.Context, req ResumeRequest) (Session, error)
 }
 
-type LiveSession interface {
-    Events() <-chan Event
+type OneShotAgent interface {
+    Agent
+    Call(ctx context.Context, req OneShotRequest) (OneShotResult, error)
+}
 
-    Send(ctx context.Context, input UserInput, opts SendOptions) error
-    Cancel(ctx context.Context) error
-    SetMode(ctx context.Context, modeID string) error
-    Respond(ctx context.Context, requestID string, reply InteractionReply) error
-    PerformAction(ctx context.Context, actionID string, input ActionInput) error
-
+type Session interface {
+    Events() <-chan FrameEvent
+    Send(ctx context.Context, msg OutboundMessage) error
     Close(ctx context.Context) error
 }
 ```
 
 Notes:
 
-- `SetMode` may be unsupported by a driver.
-- `Respond` is for pending interaction requests.
-- `PerformAction` is for optional runtime actions like compaction.
-- unsupported features should be reflected in capabilities and/or exposed action lists rather than guessed by the UI.
+- `Agent` is the minimal live-session interface.
+- `OneShotAgent` is an optional extension for helper calls like naming or description generation.
+- separate methods like `SetMode`, `Respond`, `PerformAction`, and `Cancel` are intentionally omitted; those become message/frame semantics.
+- unsupported semantics are expressed by driver behavior and Beans policy, not by expanding the core interface.
 
 ---
 
-## 3. Open/resume inputs
+## 4. Open/resume inputs
 
 ```go
-type OpenSessionRequest struct {
+type OpenRequest struct {
     BeansSessionID string
     WorkingDir     string
-    ProfileID      string // optional Beans-owned profile/policy ID
-    InitialModeID  string // default: "act"
-    Context        []ContentBlock
+    Context        []Frame
     Meta           map[string]any
 }
 
-type ResumeSessionRequest struct {
+type ResumeRequest struct {
     BeansSessionID string
     WorkingDir     string
-    ProfileID      string // optional Beans-owned profile/policy ID
-    Resume         ResumeState
+    Context        []Frame
+    Resume         ResumeToken
     Meta           map[string]any
 }
 
-type ResumeState struct {
+type ResumeToken struct {
     DriverKind string
     Opaque     map[string]any
 }
 ```
 
-`ResumeState` is adapter-owned.
-Examples:
-
-- Claude: session ID
-- ACP: ACP session ID
-- pi RPC: session file/session ID
-- Codex MCP: thread ID
-
-`ProfileID` is Beans-owned product policy, not a driver protocol concept.
-Examples:
-
-- `central_planner`
-- `worktree_implementation`
-
-Drivers may receive the resulting prompt/context through `Context` or `Meta`, but the decision to use those profiles belongs to Beans.
-
-### 3.1 Session profiles and Beans-owned policy
-
-The live-session abstraction should make room for Beans product policy without baking that policy into every driver.
-
-```go
-type SessionProfile struct {
-    ID      string
-    Prompt  []ContentBlock
-    Meta    map[string]any
-}
-```
-
 Rules:
 
-- Beans chooses the profile from product context, not from driver behavior.
-- `__central__` can map to a `central_planner` profile.
-- bean worktree chats can map to a `worktree_implementation` profile.
-- profiles may carry Beans-specific instructions such as "use `startWork` instead of runtime worktree-switch tools".
-- drivers consume profile-derived `Context` / `Meta` as plain input; they should not hard-code special semantics for Beans profile IDs.
-- worktree safety rules and prompt shaping remain Beans policy above the abstraction.
-
-This is how v2 keeps central-planner and worktree-agent behavior while still removing Claude-shaped runtime coupling.
+- `ResumeToken` is opaque to Beans except for routing by `DriverKind`.
+- `Context` carries Beans-owned prompt/context material without making prompts a first-class driver concept.
+- profiles like `central_planner` or `worktree_implementation` are compiled by Beans into `Context` and `Meta`; they are not abstract-agent primitives.
 
 ---
 
-## 4. User input and content blocks
+## 5. Messages
 
-The live-session API should take a Beans-native input model instead of Claude `stream-json` envelopes or Anthropic-specific image blocks.
+A message is the durable unit of the session timeline.
 
 ```go
-type UserInput struct {
-    Blocks []ContentBlock
+type Message struct {
+    ID        string
+    Role      MessageRole
+    Frames    []Frame
+    Meta      map[string]any
+    CreatedAt time.Time
+}
+
+type OutboundMessage struct {
+    ID     string
+    Role   MessageRole
+    Frames []Frame
     Meta   map[string]any
 }
-
-type ContentBlock interface {
-    isContentBlock()
-}
-
-type TextBlock struct {
-    Text string
-}
-
-type ImageBlock struct {
-    Attachment AttachmentRef
-    AltText    string
-}
-
-type AttachmentRef struct {
-    ID        string
-    Name      string
-    MediaType string
-    SizeBytes int64
-}
 ```
+
+Suggested message roles:
+
+- `user`
+- `assistant`
+- `system`
+- `control`
 
 Rules:
 
-- Beans persists uploaded attachments before passing input to a driver.
-- session history references attachments by durable Beans attachment IDs.
-- drivers translate `ContentBlock` values into their native wire format.
-- drivers do **not** own attachment lifecycle, serving URLs, or cleanup policy.
-- image support is capability-driven; a driver that cannot handle images should expose that via `SessionCapabilities`.
-
-This keeps multimodal input generic while preserving Beans-owned storage conventions.
-
-### 4.1 Attachment lifecycle guidance
-
-Attachment persistence is part of the Beans session model, not a driver-private concern.
-
-Suggested persisted attachment record:
-
-```go
-type PersistedAttachment struct {
-    ID               string
-    BeansSessionID   string
-    Name             string
-    MediaType        string
-    SizeBytes        int64
-    StoragePath      string
-    ReferencedByIDs  []string
-}
-```
-
-Rules:
-
-- Beans should persist attachment metadata and storage location before calling `Send(...)`.
-- persisted messages should reference attachment IDs, not inline driver payloads.
-- attachment serving URLs are derived from Beans persistence, not from driver state.
-- cleanup may happen after compaction, clear-session, or message deletion, but the policy is owned by Beans.
-- drivers should receive either bytes, local file paths, or driver-native upload handles prepared by Beans.
+- Beans persists messages, not raw runtime transport packets.
+- Beans may stream frames first and materialize/finalize messages incrementally.
+- outbound control operations like cancel, set-mode, compact, or interaction replies are represented as outbound messages with control frames.
+- a runtime may internally map one outbound message to multiple native protocol operations; that is driver behavior.
 
 ---
 
-## 5. Session state
+## 6. Frames
+
+Frames are the expressive transport/update primitive.
+
+A frame is a typed piece of message content or message-related state.
 
 ```go
-type SessionState struct {
-    BeansSessionID   string
-    DriverKind       string
-    ProfileID        string
-    Status           SessionStatus
-    WorkDir          string
-
-    Capabilities     SessionCapabilities
-    CurrentModeID    string
-    AvailableModes   []Mode
-    AvailableActions []SessionAction
-
-    Messages         []Message
-    ToolCalls        []ToolCall
-    Artifacts        []Artifact
-    PendingRequests  []InteractionRequest
-
-    StatusText       string
-    LastError        string
-    Resume           *ResumeState
+type Frame struct {
+    ID      string
+    Type    string
+    Phase   string
+    Persist bool
+    Data    map[string]any
 }
 ```
+
+Suggested `Phase` values:
+
+- `point`
+- `start`
+- `delta`
+- `end`
+
+Rules:
+
+- frames are intentionally generic and typed by `Type`.
+- drivers emit frames; Beans reduces them into durable messages and derived views.
+- some frames are persistable, some are ephemeral.
+- this model is inspired by frame/part-based streaming systems such as the Vercel AI SDK custom message parts approach.
+
+### 6.1 Standard frame semantics
+
+The abstraction should standardize a small set of common frame `Type` values, while still allowing extensions.
+
+Suggested standard types:
+
+- `text`
+- `attachment`
+- `tool_call`
+- `interaction_request`
+- `interaction_response`
+- `mode_change`
+- `action`
+- `artifact`
+- `status`
+- `error`
 
 Notes:
 
-- `ProfileID` captures Beans-owned product policy like central-planner vs worktree-agent.
-- `CurrentModeID` replaces `planMode` / `actMode` booleans.
-- `PendingRequests` replaces Claude-specific pending interaction state.
-- `ToolCalls` remain because Beans already surfaces tool-like activity, diffs, and progress.
-- `Artifacts` give Beans a generic home for documents like plans and derived diffs.
-- `AvailableActions` lets the UI render capabilities like compact without sending magic chat messages.
+- these are frame semantics, not separate top-level interface families.
+- a driver may emit additional driver-specific frame types if Beans chooses to support them.
+- Beans may also derive additional non-driver frames during reduction, e.g. derived diff artifacts.
 
-### 5.1 Persistence envelope guidance
+### 6.2 Examples
 
-The persistence format should store Beans-owned canonical state separately from driver-owned resume data.
+Normal user message:
+
+```json
+{
+  "role": "user",
+  "frames": [
+    { "type": "text", "phase": "point", "persist": true, "data": { "text": "Please inspect this bean" } }
+  ]
+}
+```
+
+User message with image:
+
+```json
+{
+  "role": "user",
+  "frames": [
+    { "type": "text", "phase": "point", "persist": true, "data": { "text": "What is in this screenshot?" } },
+    { "type": "attachment", "phase": "point", "persist": true, "data": { "attachmentId": "att_123", "mediaType": "image/png" } }
+  ]
+}
+```
+
+Control message to change mode:
+
+```json
+{
+  "role": "control",
+  "frames": [
+    { "type": "mode_change", "phase": "point", "persist": true, "data": { "modeId": "plan" } }
+  ]
+}
+```
+
+Control message to compact:
+
+```json
+{
+  "role": "control",
+  "frames": [
+    { "type": "action", "phase": "point", "persist": true, "data": { "actionId": "compact" } }
+  ]
+}
+```
+
+Interaction reply:
+
+```json
+{
+  "role": "user",
+  "frames": [
+    { "type": "interaction_response", "phase": "point", "persist": true, "data": { "requestId": "req_1", "value": "yes" } }
+  ]
+}
+```
+
+---
+
+## 7. Frame events
+
+Sessions stream frames back to Beans.
 
 ```go
-type PersistedSessionEnvelope struct {
-    Version        int
+type FrameEvent struct {
+    MessageID   string
+    MessageRole MessageRole
+    Frame       Frame
+}
+```
+
+Rules:
+
+- frame events are the live streaming surface.
+- Beans reduces frame events into persisted messages.
+- multiple frame events may contribute to one message.
+- a driver may start a new message implicitly by emitting a new `MessageID`.
+- Beans may publish both raw frame streams and reduced state to higher layers, but persistence should remain message-oriented.
+
+---
+
+## 8. Persisted vs ephemeral frames
+
+Not every streamed frame belongs in durable history.
+
+Persistable examples:
+
+- final text content
+- tool call inputs/outputs worth showing in history
+- interaction requests/responses
+- mode changes
+- actions like compact
+- artifact references
+- meaningful errors
+
+Ephemeral examples:
+
+- typing pulses
+- transient thinking indicators
+- low-level progress ticks
+- status text that is only useful while a turn is running
+- deltas that are later compacted into a final persisted frame
+
+Rules:
+
+- `Persist` is a hint from the driver/adapter layer.
+- Beans may still normalize or compact frames before persistence.
+- persisted history should optimize for durable meaning, not raw transport fidelity.
+
+---
+
+## 9. Canonical session state
+
+The minimal persisted session state does not need top-level tool-call, interaction, or artifact lists.
+
+```go
+type SessionState struct {
     BeansSessionID string
     DriverKind     string
-    ProfileID      string
-    Resume         *ResumeState
+    WorkDir        string
+    Status         SessionStatus
     Messages       []Message
-    ToolCalls      []ToolCall
-    Artifacts      []Artifact
-    Meta           map[string]any
+    Resume         *ResumeToken
+    LastError      string
 }
 ```
 
-Rules:
+Derived views such as these are allowed above the abstraction:
 
-- the persisted envelope version is Beans-owned and should be incremented when the on-disk model changes.
-- legacy Claude-only sessions should be migrated lazily when loaded or next persisted.
-- `Resume.Opaque` must be stored round-trip without Beans trying to normalize adapter-private fields.
-- canonical history should preserve Beans messages, tool calls, and artifacts separately from driver-private continuation state.
-- shutdown/clear behavior may remove live processes, but should not silently discard persisted canonical state unless the user explicitly clears it.
+- current mode
+- pending interactions
+- live tool activity
+- artifact lists
+- diff panels
+- available controls
 
-This resolves the v1 gap where persistence was effectively Claude-session-shaped.
-
----
-
-## 6. Tool calls and activity rows
-
-`ToolCalls` should be broad enough to model literal tool calls, delegated subagents, and background tasks.
-
-```go
-type ToolCall struct {
-    ID       string
-    Kind     ToolCallKind
-    ParentID string
-
-    Name     string
-    Summary  string
-    Status   ToolCallStatus
-
-    Input    map[string]any
-    Output   map[string]any
-    Meta     map[string]any
-}
-```
-
-Suggested `ToolCallKind` values:
-
-- `tool`
-- `subagent`
-- `task`
-
-This keeps the current UI's live activity feed possible without forcing the whole spec to become Claude `task_progress` shaped.
+But those should be computed from messages/frames, not added as mandatory abstract-agent primitives.
 
 ---
 
-## 7. Artifacts and derived documents
+## 10. Derived Beans concepts
 
-Some session outputs are better modeled as durable artifacts than as plain messages.
+The following are still useful in Beans, but they are no longer first-class abstract-agent primitives:
 
-```go
-type Artifact struct {
-    ID       string
-    Kind     ArtifactKind
-    Title    string
-    Blocks   []ContentBlock
-    Meta     map[string]any
-}
-```
+- profiles
+- modes
+- actions
+- interactions
+- tool calls
+- artifacts
+- attachments
+- live status rows
 
-Suggested `ArtifactKind` values:
+In v2 they are represented as either:
 
-- `plan`
-- `diff`
-- `file`
-- `note`
+- frame semantics
+- Beans persistence/storage rules
+- or derived UI state
 
-Rules:
-
-- drivers may emit artifacts directly
-- Beans may also derive artifacts from tool calls, written files, or persisted session state
-- worktree diff panes may be driven by derived `diff` artifacts rather than by runtime-specific write-event parsing in the UI
-- plan review should prefer an explicit `plan` artifact over runtime-specific file discovery like `~/.claude/plans/...`
-- artifact persistence and cleanup remain Beans responsibilities
-- decisions about how much artifact or tool detail to show stay product-owned UI policy, not driver protocol
-
-This gives plan approval and diff rendering a runtime-agnostic home.
+This is the main reduction in API surface.
 
 ---
 
-## 8. Minimal event model
+## 11. One-shot calls
 
-Drivers emit normalized events; Beans reduces them into `SessionState`.
+Some work is not part of a durable live session timeline.
 
-Core events:
+Examples:
 
-- `ResumeStateUpdated`
-- `SessionStatusChanged`
-- `ModesUpdated`
-- `ActionsUpdated`
-- `StatusTextUpdated`
-- `MessageStarted`
-- `MessageDelta`
-- `MessageCompleted`
-- `ToolCallStarted`
-- `ToolCallUpdated`
-- `ToolCallCompleted`
-- `ArtifactUpserted`
-- `ArtifactRemoved`
-- `InteractionRequested`
-- `InteractionResolved`
-- `ErrorEvent`
-- `SessionEnded`
+- generate a workspace description from the first user message
+- generate a short session name
+- summarize content for metadata
 
-Everything else should be added only when a real driver needs it.
-
----
-
-## 9. Capabilities
-
-### UI-facing session capabilities
+That belongs in an optional one-shot interface, not in the live-session API.
 
 ```go
-type SessionCapabilities struct {
-    Resume      bool
-    SetMode     bool
-    CancelTurn  bool
-    SendImages  bool
-    ToolCalls   bool
-    Artifacts   bool
-    Interaction bool
-    Actions     bool
-}
-```
-
-### Backend-only host requirements
-
-```go
-type HostCapabilityRequirements struct {
-    FileSystem  bool
-    Terminal    bool
-    Permissions bool
-}
-```
-
-This is not core UI API.
-It is backend plumbing for drivers like ACP.
-
----
-
-## 10. Interactions
-
-Interactions are session state, not synchronous host callbacks.
-
-Flow:
-
-1. driver emits `InteractionRequested`
-2. Beans stores it in `PendingRequests`
-3. UI renders it
-4. user answers
-5. Beans calls `Respond(requestID, reply)`
-
-Suggested interaction shape:
-
-```go
-type InteractionRequest struct {
-    ID          string
-    Kind        string
-    Title       string
-    Prompt      []ContentBlock
-    Options     []InteractionOption
-    ArtifactIDs []string
-    Meta        map[string]any
-}
-```
-
-Interaction kinds should include:
-
-- `permission`
-- `confirm`
-- `select`
-- `multi_select`
-- `text_input`
-- `editor`
-- `custom`
-
-Plan approval should be modeled generically as a standard Beans convention:
-
-- a `plan` artifact, plus
-- an interaction such as `confirm`, `editor`, or `custom` that references that artifact
-
-Drivers that support native planning flows should emit both sides explicitly:
-
-- mode changes via `ModesUpdated` / `SetMode(...)`
-- reviewable plan content via `ArtifactUpserted`
-- approval/refinement requests via `InteractionRequested`
-
-That keeps plan review in the spec without making the whole abstraction Claude `ExitPlanMode` shaped.
-
----
-
-## 11. Modes
-
-```go
-type Mode struct {
-    ID          string
-    Name        string
-    Description string
-}
-```
-
-Rules:
-
-- default mode is `act`
-- if a driver has no native mode system, expose:
-  - `currentModeId = "act"`
-  - `availableModes = [act]`
-  - `SetMode = false`
-- plan approval is **not** a special mode by itself; it is a mode change plus artifacts/interactions when needed
-
-This applies to pi RPC and Codex MCP.
-
----
-
-## 12. Runtime actions
-
-Some runtime behaviors are neither ordinary messages nor mode switches.
-
-```go
-type SessionAction struct {
-    ID          string
-    Name        string
-    Description string
-}
-
-type ActionInput struct {
-    Meta map[string]any
-}
-```
-
-Rules:
-
-- actions are optional and capability-driven
-- the UI should only render actions listed in `AvailableActions`
-- the first standardized action is `compact`
-- action side effects like attachment pruning remain Beans-owned follow-up behavior
-
-This replaces magic text commands like `/compact` with an explicit runtime action surface.
-
----
-
-## 13. Optional utility provider for non-session calls
-
-Some Beans features are not live chat sessions at all.
-Workspace description generation is the clearest current example.
-
-Instead of forcing those through `LiveSession`, define a separate optional helper interface:
-
-```go
-type UtilityProvider interface {
-    GenerateText(ctx context.Context, req GenerateTextRequest) (GenerateTextResult, error)
-}
-
-type GenerateTextRequest struct {
+type OneShotRequest struct {
     Purpose string
-    Prompt  []ContentBlock
+    Frames  []Frame
     Meta    map[string]any
 }
 
-type GenerateTextResult struct {
-    Text string
-    Meta map[string]any
+type OneShotResult struct {
+    Frames []Frame
+    Meta   map[string]any
 }
 ```
 
-Examples of `Purpose`:
-
-- `workspace_description`
-- `bean_title_suggestion`
-- `summary`
-
 Rules:
 
-- this interface is optional and separate from the `LiveSession` API
-- it may still be implemented by, or backed by, the same driver/runtime adapter
-- it is for one-off helper calls, not durable session state
-- utility calls may ask the driver/runtime directly to do small jobs such as generating a workspace or session name from the first user message
-- this allows Beans to reuse the user's existing runtime subscription/payment path instead of requiring a separate model provider for helper features
-- Beans may use the same runtime family for both live sessions and helper calls, but the abstractions stay separate
-- utility calls should not implicitly create durable chat history unless Beans explicitly chooses to persist the result
+- a one-shot call may reuse the same underlying runtime/driver and therefore the same user subscription/payment path.
+- it is separate from `Session` because it does not create durable chat state unless Beans explicitly persists the result.
+- the old `UtilityProvider` idea collapses into this optional one-shot capability.
 
 ---
 
-## 14. Driver mapping summary
+## 12. Beans-owned policy outside the abstraction
+
+The following remain explicitly outside the abstract-agent interface:
+
+- profile selection like `central_planner` vs `worktree_implementation`
+- prompt construction and workflow instructions
+- the decision that `__central__` is a coordinator session
+- the instruction to use Beans `startWork`
+- attachment storage paths and serving URLs
+- attachment cleanup after compaction or clear-session
+- artifact retention policy
+- GraphQL schema design
+- UI rendering decisions
+
+The driver receives context and emits frames.
+Beans owns the product.
+
+---
+
+## 13. Driver mapping summary
 
 ### Claude
-- native session + streaming adapter
-- modes: `plan`, `act`
-- actions: `compact`
-- can emit plan artifacts and plan-review interactions
-- utility provider can handle workspace description generation
-- no host requirements
+- maps Claude stream-json input/output into outbound messages and inbound frame events
+- Claude tool use becomes `tool_call` frames
+- `AskUserQuestion` becomes `interaction_request` frames
+- plan/act transitions become `mode_change` frames
+- `/compact` replacement becomes an `action` frame
+- resumability lives in `ResumeToken.Opaque`
+- one-shot naming/description generation can use `Call(...)`
 
-### pi RPC
-- prompt/steer/follow_up mapping can be added later as optional delivery behavior
-- always expose `act`
-- actions optional
-- utility provider optional
-- no host requirements
+### pi
+- maps pi session transport into the same message/frame model
+- may expose only `act`-like behavior through accepted/rejected control frames
+- resumability lives in `ResumeToken.Opaque`
+- one-shot helper generation can reuse the same runtime path
 
-### Codex MCP
-- `codex` = open
-- `codex-reply` = continue
-- always expose `act`
-- resume state is process-local thread ID
-- actions optional
-- utility provider optional
-- no host requirements
+### Codex
+- maps open/continue semantics into session open/resume
+- message streaming becomes frame events
+- resumability lives in `ResumeToken.Opaque`
 
 ### ACP / OpenCode
-- session-based adapter
-- may expose native modes
-- may expose actions and artifacts
-- requires host capabilities for FS / terminal / permissions
-- permission requests still map into normal `InteractionRequested` state
+- maps host/editor/runtime events into the same frame model
+- permission prompts become `interaction_request` frames
+- delegated work can become `tool_call` or custom frames
+- resumability lives in `ResumeToken.Opaque`
 
 ---
 
-## 15. Coverage of the current Beans use-cases
+## 14. Coverage of current Beans use-cases
 
 1. **Central planning agent**
-   - covered by `ProfileID`, `WorkingDir`, and Beans-owned `Context`
-   - the central planning prompt still exists, but now as Beans-owned profile policy
-   - the decision that `__central__` is a coordinator session remains above the driver abstraction by design
-   - instructions like "use `startWork`" stay product policy, not driver protocol
+   - represented by Beans-owned context injected into `OpenRequest.Context`
+   - no special driver primitive required
 2. **Worktree implementation agent**
-   - covered by `WorkingDir`, `ProfileID`, `ToolCalls`, and `Artifacts`
-   - worktree safety rules remain profile/prompt policy
-   - write-derived diffs can be surfaced as `diff` artifacts instead of runtime-specific UI parsing
-   - the exact amount of tool detail shown stays a Beans UI decision
+   - represented by `WorkingDir` plus Beans-owned context
 3. **Session persistence and resume**
-   - covered by `ResumeState` and driver-owned opaque resume data
-   - v2 also adds persistence-envelope guidance for versioning, lazy migration, and round-tripping opaque resume fields
+   - represented by persisted `Messages` plus opaque `ResumeToken`
 4. **Multimodal message input**
-   - covered by `UserInput`, `ContentBlock`, and `AttachmentRef`
-   - v2 also adds attachment lifecycle guidance for persistence, serving, and cleanup
+   - represented by `text` and `attachment` frames
 5. **Structured user questions**
-   - covered by `InteractionRequested`, `PendingRequests`, and `Respond(...)`
+   - represented by `interaction_request` and `interaction_response` frames
 6. **Plan mode and plan approval**
-   - covered by generic modes plus `plan` artifacts and review interactions
-   - plan review is now a first-class Beans convention rather than an implicit Claude-only file-discovery flow
+   - represented by `mode_change`, `artifact`, and interaction frames
 7. **Conversation compaction**
-   - covered by optional runtime actions, especially `compact`
-   - attachment pruning remains a Beans-owned follow-up policy
+   - represented by a control message with an `action` frame
 8. **Subagent activity and system status**
-   - covered by `StatusTextUpdated` and `ToolCall.Kind = subagent|task`
-   - v2 explicitly distinguishes tool calls, delegated subagents, and generic background tasks
+   - represented by `tool_call` and `status` frames
 9. **Workspace description generation**
-   - covered by the separate optional `UtilityProvider`
-   - this keeps one-off helper calls runtime-agnostic without forcing them into session state
+   - represented by optional `Call(...)`
 
 ---
 
-## 16. Remaining non-goals
+## 15. Non-goals
 
 This spec does **not** make Beans:
 
-- ACP-shaped internally
 - Claude-shaped internally
-- a generic editor-host protocol implementation
-- dependent on one runtime's prompt policy
-- dependent on one runtime's attachment or plan-file layout
+- ACP-shaped internally
+- dependent on runtime-specific tool names
+- dependent on runtime-specific plan file locations
+- dependent on a large method surface on `Session`
 
-It also does **not** fully specify:
+This spec also does **not** fully specify:
 
-- GraphQL schema details
-- JSONL persistence format versioning/migration
-- exact attachment storage paths
-- exact artifact retention policies
+- exact GraphQL schema shape
+- exact frame payload schemas for every standard type
+- exact on-disk JSONL format
+- exact attachment storage structure
+- exact derived-view algorithms for modes, tools, interactions, or artifacts
 
-Beans remains a session manager and UI adapter with pluggable drivers and a small adjacent utility surface.
+Those can evolve above the minimal abstraction.
+
+---
+
+## 16. Short version
+
+If a future feature can be expressed as:
+
+- a new frame type
+- a new frame payload
+- or a Beans-side derived view over messages
+
+then it should usually **not** expand the abstract-agent method surface.
+
+That is the core idea of spec v2.
