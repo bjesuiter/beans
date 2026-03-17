@@ -233,6 +233,11 @@ type ResumeSessionRequest struct {
 }
 ```
 
+Defaulting rule:
+
+- if `InitialModeID` is empty, Beans should default it to `"act"`
+- adapters that do not have a native mode concept should still report `currentModeId = "act"`
+
 Where:
 
 ```go
@@ -628,16 +633,25 @@ Map directly from ACP `availableModes` and `currentModeId`.
 ### pi-RPC
 
 pi-RPC does not have a first-class ACP-like mode system.
-Do **not** invent fake modes unless they are stable.
 
-For pi, leave `availableModes` empty unless a concrete provider-specific mode concept exists.
-Use runtime controls for things like model/thinking/queue behavior instead.
+For Beans, I want the default mode to be `act`, and pi should therefore be treated as **always in `act` mode**.
+
+So for pi I would expose:
+
+- `currentModeId = "act"`
+- `availableModes = [{ id: "act", name: "Act", description: "Default execution mode" }]`
+- `SetMode = false` in capabilities
+
+That gives the outside world a stable mode model without pretending pi supports mode switching.
+Runtime controls like model/thinking/queue behavior should stay in runtime capabilities/actions, not in modes.
 
 This distinction matters. Not every runtime concept should be forced into “modes”.
 
 ---
 
 ## 10. Commands and actions
+
+> bjesuiter: not sure about this, was an idea from gpt-5.4, but going with it for now, merging the actions and commands later is probably simple.
 
 ACP has advertised commands.
 pi-RPC has `get_commands`.
