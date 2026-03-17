@@ -300,6 +300,61 @@ It is Beans-owned persisted storage referenced by `attachment` frames.
 Not abstract primitives.
 They are live derived views over `status` and `tool_call` frames.
 
+### What is a Beans-side derived view?
+
+A **Beans-side derived view** is a higher-level object or UI projection that Beans computes from persisted messages and streamed frames.
+
+It is **not** a new primitive in the AbstractAgent interface.
+Instead, it is an interpretation layer above the primitive model.
+
+In other words:
+
+- the runtime emits messages and frames
+- Beans persists the durable timeline
+- Beans derives richer product views from that timeline
+
+Examples:
+
+- a pending interaction panel derived from the latest unresolved `interaction_request` frame
+- a current mode badge derived from the latest `mode_change` frame
+- a live tool activity list derived from `tool_call` and `status` frames
+- an artifact card/list derived from `artifact` frames or from other frames that Beans interprets as an artifact-worthy output
+- a diff panel derived from write-related frames plus repo state
+
+### Why derived views matter
+
+This is how v2 keeps the interface small without losing product richness.
+
+If Beans had to add a new abstract primitive for every UI/workflow concept, the API surface would grow again.
+Derived views prevent that.
+
+### Example: artifact as a derived view
+
+Suppose the runtime emits:
+
+- text frames containing a plan
+- tool-call frames for writing a file
+- or explicit `artifact` frames
+
+Beans can compute a higher-level artifact view such as:
+
+- "latest plan"
+- "files changed"
+- "generated diff preview"
+
+That artifact view may combine:
+
+- one or more messages
+- one or more frames
+- extra Beans knowledge such as git diff state or attachment storage
+
+So when the doc says "artifact, plus Beans-side derived views," it means:
+
+- `artifact` is a frame semantic in the abstract model
+- the nice artifact objects shown in the UI are usually Beans projections built from the timeline
+
+This same idea applies to interactions, tool activity, status rows, and other UI-facing summaries.
+
 ---
 
 ## 9. Reduction map
