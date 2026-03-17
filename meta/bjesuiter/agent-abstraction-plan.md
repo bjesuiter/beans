@@ -160,8 +160,9 @@ I would introduce these layers:
 ```go
 type Driver interface {
     Kind() string
-    Open(ctx context.Context, req OpenSessionRequest, host HostServices) (LiveSession, error)
-    Resume(ctx context.Context, req ResumeSessionRequest, host HostServices) (LiveSession, error)
+    HostCapabilityRequirements() HostCapabilityRequirements
+    Open(ctx context.Context, req OpenSessionRequest) (LiveSession, error)
+    Resume(ctx context.Context, req ResumeSessionRequest) (LiveSession, error)
 }
 ```
 
@@ -175,40 +176,49 @@ type LiveSession interface {
     Send(ctx context.Context, input UserInput, opts SendOptions) error
     Cancel(ctx context.Context) error
     SetMode(ctx context.Context, modeID string) error
-    Reply(ctx context.Context, requestID string, reply InteractionReply) error
+    Respond(ctx context.Context, requestID string, reply InteractionReply) error
     Invoke(ctx context.Context, action ActionInvocation) (ActionResult, error)
 
     Close(ctx context.Context) error
 }
 ```
 
-### Host services
+### Host capability requirements
 
-This is the client/runtime boundary that ACP especially needs.
+The core abstraction should stay minimal and **not** require a general host-services interface.
+
+User-facing prompts/confirmations/choices should be modeled as first-class session events/state:
+
+- adapter emits `InteractionRequested`
+- reducer stores it on the session
+- UI renders it
+- Beans answers through `Respond(...)`
+
+That means interactions are part of the normal session model, not synchronous host callbacks.
+
+What we may still need later for specific drivers is a backend-only declaration of required host execution capabilities.
 
 ```go
-type HostServices interface {
-    RequestPermission(ctx context.Context, req PermissionRequest) (PermissionDecision, error)
-
-    ReadTextFile(ctx context.Context, req ReadTextFileRequest) (ReadTextFileResult, error)
-    WriteTextFile(ctx context.Context, req WriteTextFileRequest) error
-
-    CreateTerminal(ctx context.Context, req CreateTerminalRequest) (CreateTerminalResult, error)
-    GetTerminalOutput(ctx context.Context, req TerminalOutputRequest) (TerminalOutputResult, error)
-    WaitTerminalExit(ctx context.Context, req WaitTerminalExitRequest) (TerminalExitResult, error)
-    KillTerminal(ctx context.Context, req KillTerminalRequest) error
-    ReleaseTerminal(ctx context.Context, req ReleaseTerminalRequest) error
-
-    // Generic user interaction surface for pi extension UI / Claude AskUser / future custom requests.
-    RequestInteraction(ctx context.Context, req InteractionRequest) (InteractionReply, error)
+type HostCapabilityRequirements struct {
+    FileSystem  bool
+    Terminal    bool
+    Permissions bool
 }
 ```
 
-This is important:
+This is primarily for ACP-like drivers.
 
-- ACP maps directly to `RequestPermission`, FS, and terminal host methods
-- Claude adapter will barely use host services today
-- pi adapter can use `RequestInteraction` for extension UI flows
+Examples:
+
+- Claude: all `false`
+- pi-RPC: all `false`
+- Codex MCP: all `false`
+- ACP/OpenCode: likely `true` for file system, terminal, and permission mediation
+
+Important distinction:
+
+- `SessionCapabilities` and `RuntimeCapabilities` are for the external/UI-facing API
+- `HostCapabilityRequirements` is backend plumbing and does not need to be exposed in the main Beans API unless useful for diagnostics
 
 ---
 
@@ -394,17 +404,14 @@ The external API must be driven by a capability object instead of hardcoded assu
 
 ```go
 type SessionCapabilities struct {
-    Resume            bool
-    SetMode           bool
-    CancelTurn        bool
-    SendImages        bool
-    Commands          bool
-    Plans             bool
-    ToolCalls         bool
-    Interaction       bool
-    PermissionRequest bool
-    FileSystem        bool
-    Terminal          bool
+    Resume      bool
+    SetMode     bool
+    CancelTurn  bool
+    SendImages  bool
+    Commands    bool
+    Plans       bool
+    ToolCalls   bool
+    Interaction bool
 }
 ```
 
@@ -427,6 +434,18 @@ type RuntimeCapabilities struct {
 ```
 
 These are especially needed for pi-RPC.
+
+## 6.3 Backend-only host requirements
+
+```go
+type HostCapabilityRequirements struct {
+    FileSystem  bool
+    Terminal    bool
+    Permissions bool
+}
+```
+
+This is how ACP can be bolted on later without making ACP the core abstraction.
 
 ---
 
@@ -773,7 +792,7 @@ Beans becomes an ACP **client** and the external agent is the ACP **agent**.
 - `Send()` -> `session/prompt`
 - `SetMode()` -> `session/set_mode`
 - `Cancel()` -> `session/cancel`
-- `Reply(permission)` -> return result to in-flight `session/request_permission`
+- `Respond(...)` -> return the result to the in-flight `session/request_permission`
 
 ### Output mapping
 
@@ -783,16 +802,27 @@ Beans becomes an ACP **client** and the external agent is the ACP **agent**.
 - `current_mode_update` -> `CurrentModeChanged`
 - `available_commands_update` -> `CommandsUpdated`
 
-### Host services mapping
+### Host capability mapping
 
-ACP is where `HostServices` really matters:
+ACP is where `HostCapabilityRequirements` really matters.
 
-- `session/request_permission`
-- `fs/read_text_file`
-- `fs/write_text_file`
-- `terminal/*`
+The ACP driver should likely declare:
 
-This is why the host boundary must exist in the abstraction.
+```go
+HostCapabilityRequirements{
+    FileSystem:  true,
+    Terminal:    true,
+    Permissions: true,
+}
+```
+
+Mapping:
+
+- `session/request_permission` should become a normal `InteractionRequested` event plus a later `Respond(...)`
+- `fs/read_text_file` / `fs/write_text_file` are ACP adapter backend plumbing
+- `terminal/*` is ACP adapter backend plumbing
+
+This is why ACP should be supported as an adapter with extra backend requirements, not as the core abstraction.
 
 ---
 
@@ -1006,10 +1036,11 @@ Goal: make the API generic enough for another driver.
 ## Phase 3 — Add ACP driver
 
 - implement ACP client transport and session management
-- implement HostServices for permission / fs / terminal
+- implement ACP backend plumbing based on `HostCapabilityRequirements` for permission / fs / terminal
 - map ACP events into canonical reducer
+- map ACP permission requests into the normal interaction-state flow
 
-Goal: prove the abstraction handles an editor-agent protocol cleanly.
+Goal: prove the abstraction can support an editor-agent protocol without making ACP the core model.
 
 ## Phase 4 — Add pi-RPC driver
 
