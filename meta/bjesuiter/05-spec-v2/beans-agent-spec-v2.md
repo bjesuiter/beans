@@ -227,6 +227,7 @@ Suggested standard types:
 Notes:
 
 - these are frame semantics, not separate top-level interface families.
+- `attachment` frames should usually be treated as rich references to Beans-owned persisted data, not raw inlined blobs. In practice they normally carry handles such as attachment IDs, media type, file name, size/hash metadata, or a local lookup path.
 - a driver may emit additional driver-specific frame types if Beans chooses to support them.
 - Beans may also derive additional non-driver frames during reduction, e.g. derived diff artifacts.
 
@@ -366,6 +367,8 @@ Derived views such as these are allowed above the abstraction:
 - artifact lists
 - diff panels
 - available controls
+
+These are Beans-side projections computed from persisted messages and streamed frames, sometimes combined with extra Beans knowledge such as attachment storage or git diff state.
 
 But those should be computed from messages/frames, not added as mandatory abstract-agent primitives.
 
