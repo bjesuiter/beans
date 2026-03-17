@@ -8,7 +8,7 @@ created_at: 2026-03-17T17:21:39Z
 updated_at: 2026-03-17T17:23:16Z
 ---
 
-Create concrete child task beans for each epic referenced in meta/bjesuiter/04-implementation/beans-agent-abstraction-impl.md.
+Create concrete child task beans for each epic referenced in meta/bjesuiter/05-implementation/beans-agent-abstraction-impl.md.
 
 ## Tasks
 
@@ -25,4 +25,4 @@ Create concrete child task beans for each epic referenced in meta/bjesuiter/04-i
 - created 5 child task beans under `beans-7oo3`
 - created 5 child task beans under `beans-e0wt`
 - verified each new task links to its epic via the parent relationship
-- left `meta/bjesuiter/04-implementation/beans-agent-abstraction-impl.md` unchanged as requested
+- left `meta/bjesuiter/05-implementation/beans-agent-abstraction-impl.md` unchanged as requested
