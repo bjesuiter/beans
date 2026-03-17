@@ -1,35 +1,41 @@
 # Agent abstraction plan for Beans
 
-This is a first proposal for a **protocol-agnostic agent abstraction** in Beans that can cover:
+This is the prose plan behind the minimal Beans agent spec.
+
+It covers how Beans should evolve from the current Claude-specific integration toward a small Beans-native abstraction that can support:
 
 - `meta/docs/beans-claude/current-integration.md` — current Claude Code CLI integration
-- `meta/docs/acp/` — Agent Client Protocol
+- `meta/docs/acp/` — ACP / OpenCode
 - `meta/docs/pi-rcp/rpc.md` — pi RPC mode
-- `meta/docs/codex-mcp/mcp-server-exploration.md` — Codex MCP server as observed locally
+- `meta/docs/codex-mcp/mcp-server-exploration.md` — Codex MCP server
 
-The goal is **not** to force all four protocols into one wire format.
+The goal is **not** to force all of these protocols into one wire format.
 The goal is to define:
 
-1. a **single internal Go interface** that Beans can program against
-2. a **single external Beans API contract** that the web UI can use
-3. adapter implementations for each concrete protocol/runtime
+1. one small internal Go abstraction
+2. one UI-facing Beans session model
+3. one reducer-driven state flow
+4. concrete drivers per protocol/runtime
 
 ---
 
 ## 1. Summary
 
+The new direction is intentionally smaller than the earlier drafts.
+
 My recommendation is:
 
-- make Beans define its own **canonical session model + event model**
-- make each runtime/protocol implement a **driver/session adapter**
-- move protocol parsing and protocol-specific quirks to adapters
-- make the Beans manager/reducer own the UI-facing state
-- make the GraphQL API **capability-driven and mode-driven**, not Claude-shaped
+- make Beans define a **minimal canonical session model**
+- make each runtime implement a **driver adapter**
+- keep **interactions as first-class session events/state**
+- keep **host execution requirements optional and backend-only**
+- only model in the core what Beans clearly needs today
+- add richer concepts later only when a real driver/UI feature needs them
 
 In short:
 
 > **Beans should not expose Claude, ACP, pi-RPC, or Codex MCP directly.**
-> It should expose a Beans-native agent session model that those protocols can map into.
+> It should expose a small Beans-native session model that those runtimes can map into.
 
 ---
 
@@ -40,43 +46,23 @@ Today the implementation leaks Claude concepts into both the backend state and t
 - `planMode` / `actMode`
 - `pendingInteraction` with `EXIT_PLAN` / `ASK_USER`
 - `/compact` as a message-level control
-- Claude-specific session resume semantics
+- Claude-specific resume semantics
 - Claude-specific tool names
 - Claude-specific subagent progress
 
-That works for the current adapter, but it does **not** fit ACP or pi-RPC cleanly.
+That works for the current adapter, but it is too specific to be the long-term model.
 
-### ACP mismatch
+What Beans really needs at its center is much smaller:
 
-ACP is centered around:
+- open/resume a session
+- send input
+- cancel/stop
+- set mode if supported
+- receive streamed output/events
+- surface pending interactions
+- persist canonical history + resume state
 
-- explicit `session/new`, `session/load`, `session/prompt`
-- `session/update` notifications
-- generic `availableModes` / `currentModeId`
-- generic `tool_call` lifecycle
-- generic `session/request_permission`
-- client-provided FS and terminal services
-
-ACP does **not** want Beans' core API to be hardcoded to Claude's `plan/act` booleans.
-
-### pi-RPC mismatch
-
-pi RPC exposes:
-
-- prompt / steer / follow-up queueing
-- explicit `compact`, `set_model`, `set_thinking_level`
-- event streams for messages and tool execution
-- extension UI requests (`select`, `confirm`, `input`, `editor`)
-- session switching/forking/session naming
-
-pi RPC has **more runtime controls** than ACP, and some are not part of Claude today.
-
-So the right answer is not “choose one protocol as the API”.
-The right answer is to define a stable **Beans-native abstraction** that can represent:
-
-- the common core
-- optional capabilities
-- protocol-specific extensions behind capabilities
+Everything beyond that should be optional.
 
 ---
 
@@ -84,51 +70,93 @@ The right answer is to define a stable **Beans-native abstraction** that can rep
 
 ## 3.1 Canonical model, not protocol passthrough
 
-Beans should reduce all protocols into a canonical model:
+Beans should reduce all runtimes into one canonical session model.
+
+Not every protocol feature belongs in the initial core.
+The core should focus on:
 
 - session lifecycle
-- prompt input
-- message output
-- tool execution
-- plans
+- messages
 - modes
-- interaction requests
-- optional runtime controls
+- interactions
+- status/error
+- resume state
+- tool calls
 
-## 3.2 Capabilities first
+## 3.2 Reducer architecture
 
-If a protocol/runtime supports a feature, advertise it.
-If it does not, the UI disables the control.
-
-Do **not** encode capability assumptions into field names.
-
-## 3.3 Opaque resume state
-
-Beans should not assume that all runtimes resume with a Claude-style `session_id`.
-
-Instead, store an opaque adapter-owned resume payload, e.g.:
-
-- Claude: CLI `session_id`
-- ACP: ACP `sessionId`
-- pi-RPC: session file path and/or session ID
-
-## 3.4 Reducer architecture
-
-Adapters should emit normalized events.
-Beans should reduce those events into session state for GraphQL/subscriptions.
+Drivers emit normalized events.
+Beans reduces those events into session state.
+GraphQL and the UI consume that state.
 
 That gives a clean split:
 
-- **adapter** = transport/protocol/runtime integration
-- **manager/reducer** = Beans-owned state model
-- **GraphQL** = Beans-owned external API
+- **driver** = protocol/runtime integration
+- **manager/reducer** = Beans-owned state
+- **GraphQL** = external Beans API
+- **UI** = renderer of Beans session state
 
-## 3.5 Separate core vs optional controls
+## 3.3 Opaque resume state
 
-The abstraction should distinguish:
+Beans should not assume every runtime resumes like Claude.
 
-- **core session features** every adapter should try to implement
-- **optional controls** such as compaction, model switching, queueing, session fork/switch, slash commands
+Resume state should stay adapter-owned and opaque, for example:
+
+- Claude: CLI `session_id`
+- ACP: ACP `sessionId`
+- pi RPC: session file / session ID
+- Codex MCP: `threadId`
+
+## 3.4 Interactions are state, not callbacks
+
+This is one of the key decisions.
+
+Beans should not center the abstraction around synchronous host UI callbacks.
+Instead:
+
+1. driver emits `InteractionRequested`
+2. reducer stores it on the session
+3. UI renders it
+4. user answers it
+5. Beans calls `Respond(...)`
+
+This cleanly fits:
+
+- Claude `AskUserQuestion`
+- Claude plan approval
+- pi extension UI requests
+- ACP permission requests
+
+## 3.5 Host execution requirements are optional
+
+ACP/OpenCode is important, but ACP should **not** become the core model.
+
+Instead, ACP-specific backend needs like:
+
+- file system access
+- terminal access
+- permission mediation
+
+should live behind a separate backend-only declaration:
+
+- `HostCapabilityRequirements`
+
+That means:
+
+- Claude/pi/Codex do not force ACP host semantics into the core
+- ACP can still be added later as a driver with extra backend requirements
+
+## 3.6 Default to `act`
+
+Beans should default the mode to `act`.
+
+If a runtime has no native mode concept, Beans should still expose:
+
+- `currentModeId = "act"`
+- `availableModes = [act]`
+- `SetMode = false`
+
+That keeps the external model stable without inventing fake mode switching.
 
 ---
 
@@ -143,19 +171,19 @@ I would introduce these layers:
    - reducer/state machine
    - persistence model
 2. `agentdrivers/claude/`
-   - current Claude Code CLI adapter
+   - Claude Code CLI adapter
 3. `agentdrivers/acp/`
-   - ACP adapter
+   - ACP/OpenCode adapter
 4. `agentdrivers/pi/`
    - pi RPC adapter
-5. `agentmanager/`
+5. `agentdrivers/codex/`
+   - Codex MCP adapter
+6. `agentmanager/`
    - Beans session orchestration and pub/sub
-
----
 
 ## 4.2 Core interfaces
 
-### Driver factory
+The base interface should stay small:
 
 ```go
 type Driver interface {
@@ -164,73 +192,36 @@ type Driver interface {
     Open(ctx context.Context, req OpenSessionRequest) (LiveSession, error)
     Resume(ctx context.Context, req ResumeSessionRequest) (LiveSession, error)
 }
-```
 
-### Live session
-
-```go
 type LiveSession interface {
-    Info() SessionRuntimeInfo
     Events() <-chan Event
 
     Send(ctx context.Context, input UserInput, opts SendOptions) error
     Cancel(ctx context.Context) error
     SetMode(ctx context.Context, modeID string) error
     Respond(ctx context.Context, requestID string, reply InteractionReply) error
-    Invoke(ctx context.Context, action ActionInvocation) (ActionResult, error)
 
     Close(ctx context.Context) error
 }
 ```
 
-### Host capability requirements
+Notably removed from the core:
 
-The core abstraction should stay minimal and **not** require a general host-services interface.
+- `Info()`
+- direct runtime action invocation
+- protocol-specific host service methods
 
-User-facing prompts/confirmations/choices should be modeled as first-class session events/state:
-
-- adapter emits `InteractionRequested`
-- reducer stores it on the session
-- UI renders it
-- Beans answers through `Respond(...)`
-
-That means interactions are part of the normal session model, not synchronous host callbacks.
-
-What we may still need later for specific drivers is a backend-only declaration of required host execution capabilities.
-
-```go
-type HostCapabilityRequirements struct {
-    FileSystem  bool
-    Terminal    bool
-    Permissions bool
-}
-```
-
-This is primarily for ACP-like drivers.
-
-Examples:
-
-- Claude: all `false`
-- pi-RPC: all `false`
-- Codex MCP: all `false`
-- ACP/OpenCode: likely `true` for file system, terminal, and permission mediation
-
-Important distinction:
-
-- `SessionCapabilities` and `RuntimeCapabilities` are for the external/UI-facing API
-- `HostCapabilityRequirements` is backend plumbing and does not need to be exposed in the main Beans API unless useful for diagnostics
-
----
+Those can be added later if real usage demands them.
 
 ## 4.3 Session configuration
+
+The open/resume requests should also stay small:
 
 ```go
 type OpenSessionRequest struct {
     BeansSessionID string
     WorkingDir     string
-    Provider       ProviderRef
-    InitialModeID  string
-    MCPServers     []MCPServerConfig
+    InitialModeID  string // default: "act"
     Context        []ContentBlock
     Meta           map[string]any
 }
@@ -238,93 +229,65 @@ type OpenSessionRequest struct {
 type ResumeSessionRequest struct {
     BeansSessionID string
     WorkingDir     string
-    Provider       ProviderRef
     Resume         ResumeState
     Meta           map[string]any
 }
-```
 
-Defaulting rule:
-
-- if `InitialModeID` is empty, Beans should default it to `"act"`
-- adapters that do not have a native mode concept should still report `currentModeId = "act"`
-
-Where:
-
-```go
 type ResumeState struct {
     DriverKind string
     Opaque     map[string]any
 }
 ```
 
-Examples:
-
-- Claude: `{DriverKind:"claude", Opaque:{"sessionId":"abc"}}`
-- ACP: `{DriverKind:"acp", Opaque:{"sessionId":"sess_123"}}`
-- pi: `{DriverKind:"pi-rpc", Opaque:{"sessionFile":"/path/...","sessionId":"abc"}}`
-`
-
----
+This means the earlier ideas like `ProviderRef` or `MCPServers` should **not** be part of the initial core request shape.
+If ACP later needs extra setup, it can come through `Meta` or a later extension.
 
 ## 4.4 Canonical session state
 
-The manager should keep a canonical snapshot like this:
+The reducer-owned session state should also be minimal:
 
 ```go
 type SessionState struct {
-    BeansSessionID string
-    DriverKind     string
-    Status         SessionStatus
-    WorkDir        string
+    BeansSessionID  string
+    DriverKind      string
+    Status          SessionStatus
+    WorkDir         string
 
-    Capabilities   SessionCapabilities
+    Capabilities    SessionCapabilities
+    CurrentModeID   string
+    AvailableModes  []Mode
 
-    CurrentModeID  string
-    AvailableModes []Mode
-
-    Messages       []Message
-    ToolCalls      []ToolCall
-    Plan           *Plan
+    Messages        []Message
+    ToolCalls       []ToolCall
     PendingRequests []InteractionRequest
-    Commands       []CommandDescriptor
 
-    StatusText     string
-    LastError      string
-
-    Runtime        RuntimeState
-    Resume         *ResumeState
+    StatusText      string
+    LastError       string
+    Resume          *ResumeState
 }
 ```
 
-Key point:
+Notes:
 
-- `CurrentModeID` + `AvailableModes[]` replaces `planMode` / `actMode`
-- `PendingRequests[]` replaces Claude-specific `pendingInteraction`
-- `ToolCalls[]` replaces Claude-only tool message hacks as the primary execution model
-- `Capabilities` tells the UI what controls exist
+- `CurrentModeID` replaces `planMode` / `actMode`
+- `PendingRequests` replaces Claude-specific pending interaction state
+- `ToolCalls` remain in the minimal spec because Beans already exposes tool-like activity, diffs, and progress today
 
----
+What is intentionally not first-class in the minimal spec yet:
 
-## 4.5 Canonical event model
+- plans
+- commands
+- runtime actions
+- richer runtime capability objects
 
-Adapters should emit normalized events like:
+## 4.5 Minimal event model
 
-```go
-type Event interface{ isEvent() }
-```
+Drivers should emit only the events the current Beans model clearly needs:
 
-Recommended event set:
-
-- `SessionOpened`
-- `SessionResumed`
-- `SessionStatusChanged`
 - `ResumeStateUpdated`
+- `SessionStatusChanged`
 - `ModesUpdated`
-- `CurrentModeChanged`
-- `CommandsUpdated`
 - `StatusTextUpdated`
-- `PlanUpdated`
 - `MessageStarted`
 - `MessageDelta`
 - `MessageCompleted`
@@ -333,74 +296,34 @@ Recommended event set:
 - `ToolCallCompleted`
 - `InteractionRequested`
 - `InteractionResolved`
-- `RuntimeUpdated`
 - `ErrorEvent`
 - `SessionEnded`
 
-That event model is the real protocol boundary.
-
-The reducer turns events into `SessionState`.
+Everything else should be added only when a real driver needs it.
 
 ---
 
 ## 5. Canonical content model
 
-I would strongly recommend reusing **ACP/MCP-style content blocks** internally.
+I still think Beans should reuse ACP/MCP-style content blocks internally where practical.
 
-That gives Beans a modern and flexible base type for:
+Why:
 
-- text
-- image
-- audio
-- resource
-- resource_link
-- thinking
-- tool call references
-- terminal references
-- diffs
+- ACP already uses them
+- Claude image/text input already looks similar
+- pi and Codex output can be mapped into them
+- it avoids inventing yet another content structure
 
-### Proposal
-
-Use ACP/MCP-style content blocks for general display content, then define Beans-native wrappers for places where lifecycle matters.
-
-Examples:
-
-```go
-type Message struct {
-    ID        string
-    Role      MessageRole
-    Blocks    []ContentBlock
-    Timestamp time.Time
-    Meta      map[string]any
-}
-
-type ToolCall struct {
-    ID        string
-    Title     string
-    Kind      ToolKind
-    Status    ToolCallStatus
-    Content   []ToolCallContent
-    Locations []Location
-    RawInput  map[string]any
-    RawOutput map[string]any
-    Meta      map[string]any
-}
-```
-
-Why this is a good fit:
-
-- ACP already uses this structure
-- pi-RPC messages/tool results can be converted into it
-- Claude stdin image/text content already looks Anthropic/MCP-ish
-- it avoids inventing yet another content schema
+But the core should not over-design this part yet.
+The important thing is that messages and tool calls can carry flexible content blocks when needed.
 
 ---
 
 ## 6. Capabilities model
 
-The external API must be driven by a capability object instead of hardcoded assumptions.
+The capability model should be simplified as well.
 
-## 6.1 Core session capabilities
+## 6.1 UI-facing session capabilities
 
 ```go
 type SessionCapabilities struct {
@@ -408,34 +331,14 @@ type SessionCapabilities struct {
     SetMode     bool
     CancelTurn  bool
     SendImages  bool
-    Commands    bool
-    Plans       bool
     ToolCalls   bool
     Interaction bool
 }
 ```
 
-## 6.2 Optional runtime controls
+This is enough for the minimal API.
 
-```go
-type RuntimeCapabilities struct {
-    Steering          bool
-    FollowUpQueue     bool
-    Compact           bool
-    AutoCompact       bool
-    ModelSelection    bool
-    ThinkingLevel     bool
-    SessionFork       bool
-    SessionSwitch     bool
-    SessionNaming     bool
-    ExportHTML        bool
-    BashCommand       bool
-}
-```
-
-These are especially needed for pi-RPC.
-
-## 6.3 Backend-only host requirements
+## 6.2 Backend-only host requirements
 
 ```go
 type HostCapabilityRequirements struct {
@@ -445,46 +348,32 @@ type HostCapabilityRequirements struct {
 }
 ```
 
-This is how ACP can be bolted on later without making ACP the core abstraction.
+This is **not** part of the core UI-facing API.
+It is backend plumbing for ACP-like drivers.
+
+That is the key compromise:
+
+- ACP support stays possible
+- ACP does not define the whole abstraction
 
 ---
 
-## 7. Proposed external GraphQL/API shape
+## 7. External GraphQL/API direction
 
-I would move from a Claude-shaped session API to a capability-driven one.
+The GraphQL API should move away from the Claude-shaped session model, but the first generic version should stay smaller than earlier drafts.
 
-## 7.1 Session object
+At minimum, the external session shape should move toward:
 
-Proposed direction:
+- session id / driver kind / status / workdir
+- capabilities
+- current mode + available modes
+- messages
+- tool calls
+- pending requests
+- status text
+- error
 
-```graphql
-type AgentSession {
-  id: ID!
-  driverKind: String!
-  status: AgentSessionStatus!
-  workDir: String
-
-  capabilities: AgentSessionCapabilities!
-  runtimeCapabilities: AgentRuntimeCapabilities!
-
-  currentModeId: String
-  availableModes: [AgentMode!]!
-
-  messages: [AgentMessage!]!
-  toolCalls: [AgentToolCall!]!
-  plan: AgentPlan
-  pendingRequests: [AgentInteractionRequest!]!
-  commands: [AgentCommand!]!
-
-  statusText: String
-  error: String
-  runtime: AgentRuntimeState!
-}
-```
-
-### Replace current Claude-specific fields
-
-Replace:
+The current Claude-specific fields to phase out are still:
 
 - `planMode`
 - `actMode`
@@ -492,97 +381,23 @@ Replace:
 - `systemStatus`
 - `subagentActivities`
 
-With:
+The minimal generic mutations should be:
 
-- `currentModeId`
-- `availableModes`
-- `pendingRequests`
-- `statusText`
-- `toolCalls`
-- `runtime`
+- send input
+- cancel turn
+- set mode
+- respond to interaction
+- clear session
 
-This is a much better fit for all three protocols.
-
----
-
-## 7.2 Mutations
-
-### Core mutations
-
-```graphql
-sendAgentInput(sessionId: ID!, input: AgentInput!, delivery: AgentDeliveryMode = IMMEDIATE): Boolean!
-cancelAgentTurn(sessionId: ID!): Boolean!
-setAgentMode(sessionId: ID!, modeId: String!): Boolean!
-respondToAgentRequest(sessionId: ID!, requestId: ID!, response: AgentInteractionResponseInput!): Boolean!
-clearAgentSession(sessionId: ID!): Boolean!
-```
-
-### Optional control mutations
-
-These should exist only as generic runtime actions, not as protocol-specific hacks:
-
-```graphql
-invokeAgentAction(sessionId: ID!, action: String!, args: JSON): AgentActionResult!
-```
-
-Examples:
-
-- `action = "compact"`
-- `action = "setModel"`
-- `action = "setThinkingLevel"`
-- `action = "setSessionName"`
-- `action = "forkSession"`
-
-The UI can discover whether these are available from `runtimeCapabilities`.
-
----
-
-## 7.3 Delivery modes
-
-One important difference between protocols is message delivery while streaming.
-
-Proposed generic enum:
-
-```graphql
-enum AgentDeliveryMode {
-  IMMEDIATE
-  INTERRUPT_WHEN_POSSIBLE
-  AFTER_TURN
-}
-```
-
-Mapping:
-
-- Claude current: likely `IMMEDIATE` only, with best-effort current stdin behavior
-- ACP: `IMMEDIATE` only unless an adapter provides an extension
-- pi-RPC:
-  - `IMMEDIATE` -> `prompt`
-  - `INTERRUPT_WHEN_POSSIBLE` -> `steer`
-  - `AFTER_TURN` -> `follow_up`
-
-This is better than encoding pi-specific queue commands into the core API.
+Direct runtime actions like compaction or model switching should be deferred until a real driver/UI feature forces them.
 
 ---
 
 ## 8. Interaction request model
 
-This is where all three systems can meet.
+The interaction model still matters a lot, even in the reduced spec.
 
-## 8.1 Canonical interaction request
-
-```go
-type InteractionRequest struct {
-    ID          string
-    Kind        InteractionKind
-    Title       string
-    Description string
-    Options     []InteractionOption
-    Content     []ContentBlock
-    Meta        map[string]any
-}
-```
-
-Kinds should include at least:
+At minimum, interaction kinds should cover:
 
 - `permission`
 - `confirm`
@@ -592,35 +407,28 @@ Kinds should include at least:
 - `editor`
 - `custom`
 
-## 8.2 Mapping
+Mapping examples:
 
 ### Claude
-
 - `AskUserQuestion` -> `select` / `multi_select` / `text_input`
-- `ExitPlanMode` -> `permission` or `confirm` with plan content attached
-- `EnterPlanMode` -> agent-driven `CurrentModeChanged` or optional hidden auto-approve flow
+- exit-plan approval -> `confirm` or `permission`
 
 ### ACP
-
 - `session/request_permission` -> `permission`
-- future custom ACP requests via `_meta` or `_` methods -> `custom`
 
 ### pi-RPC
-
-- `extension_ui_request.select` -> `select`
+- extension UI `select` -> `select`
 - `confirm` -> `confirm`
 - `input` -> `text_input`
 - `editor` -> `editor`
 
-This lets the UI build a single interaction surface.
+This is still the cleanest shared surface across runtimes.
 
 ---
 
 ## 9. Mode model
 
-The current Beans `planMode`/`actMode` booleans should become a generic mode system.
-
-## 9.1 Canonical mode type
+The mode model stays, but also stays simple.
 
 ```go
 type Mode struct {
@@ -630,92 +438,38 @@ type Mode struct {
 }
 ```
 
-And session state keeps:
-
-- `CurrentModeID`
-- `AvailableModes`
-
-## 9.2 Mapping
+Mapping:
 
 ### Claude
-
-Expose modes as:
-
 - `plan`
 - `act`
 
-Even if Claude internally uses booleans and special tool flows.
-
 ### ACP
-
-Map directly from ACP `availableModes` and `currentModeId`.
+- whatever the agent exposes natively
 
 ### pi-RPC
+- always expose `act`
+- no mode switching
 
-pi-RPC does not have a first-class ACP-like mode system.
-
-For Beans, I want the default mode to be `act`, and pi should therefore be treated as **always in `act` mode**.
-
-So for pi I would expose:
-
-- `currentModeId = "act"`
-- `availableModes = [{ id: "act", name: "Act", description: "Default execution mode" }]`
-- `SetMode = false` in capabilities
-
-That gives the outside world a stable mode model without pretending pi supports mode switching.
-Runtime controls like model/thinking/queue behavior should stay in runtime capabilities/actions, not in modes.
-
-This distinction matters. Not every runtime concept should be forced into “modes”.
+### Codex MCP
+- always expose `act`
+- no mode switching
 
 ---
 
-## 10. Commands and actions
+## 10. What we are explicitly deferring
 
-> bjesuiter: not sure about this, was an idea from gpt-5.4, but going with it for now, merging the actions and commands later is probably simple.
+Compared to earlier drafts, the following are no longer part of the minimal core plan:
 
-ACP has advertised commands.
-pi-RPC has `get_commands`.
-Claude currently has implicit slash commands like `/compact` and possibly future explicit commands.
+- first-class plans
+- commands
+- direct runtime actions in the base interface
+- richer runtime capability objects
+- ACP-specific open/session config beyond `Meta`
 
-I would separate:
+These may still be added later, but only when a real driver or UI requirement justifies them.
 
-- **commands**: user-invoked, prompt-like, shown in composer menus
-- **actions**: direct API controls that do not go through the natural language prompt path
-
-### Commands
-
-```go
-type CommandDescriptor struct {
-    Name        string
-    Description string
-    InputHint   string
-    Source      string
-    Meta        map[string]any
-}
-```
-
-### Actions
-
-```go
-type ActionDescriptor struct {
-    Name        string
-    Description string
-    ArgsSchema  map[string]any
-}
-```
-
-Examples:
-
-- command: `/plan`
-- command: `/skill:brave-search`
-- action: `compact`
-- action: `setModel`
-- action: `setThinkingLevel`
-
-Recommendation:
-
-- keep user-facing slash/prompt commands as **commands**
-- keep explicit operational controls as **actions**
+That is a deliberate simplification.
 
 ---
 
@@ -723,90 +477,70 @@ Recommendation:
 
 Current persistence is too Claude-specific because it mainly stores messages plus a Claude session ID.
 
-I would change persistence to store:
+The new persistence direction should be:
 
-1. canonical message/tool/plan history for UI replay
-2. adapter resume state
-3. driver kind
-4. last known modes/capabilities/runtime settings
+1. canonical message history
+2. canonical tool-call history if/when used
+3. adapter-owned resume state
+4. driver kind
+5. enough metadata to rebuild session state safely
 
-## 11.1 Proposed persisted metadata
+The main rule remains:
 
-```json
-{
-  "type": "meta",
-  "driverKind": "claude",
-  "resume": {
-    "driverKind": "claude",
-    "opaque": {"sessionId": "abc123"}
-  },
-  "currentModeId": "act",
-  "sessionName": "feature xyz"
-}
-```
+- persist Beans-owned canonical history
+- persist adapter-owned opaque resume state
 
-You can keep JSONL for append-only history, but the meta entry format should become adapter-agnostic.
+This is especially important for Codex MCP, where native resume state is not durable across process restarts.
 
 ---
 
-## 12. How each adapter would map into the abstraction
+## 12. How each adapter would map into the reduced abstraction
 
 ## 12.1 Claude adapter
 
-Wrap the current implementation.
+Claude is still the first implementation and the reference migration path.
 
 ### Input mapping
 
-- `Send(IMMEDIATE)` -> stdin `type:user` message JSONL
-- images -> current Anthropic-style content blocks
-- `Cancel()` -> current process signal/kill
+- `Send(...)` -> stdin `stream-json` user message
+- `Cancel()` -> stop the current process
 - `SetMode(plan|act)` -> respawn with appropriate flags
-- `Invoke(compact)` -> send `/compact` as a normal user input or implement as adapter-native shortcut
+- `Respond(...)` -> usually plain follow-up user input such as `yes, proceed` or selected answers
 
 ### Output mapping
 
-- `assistant` / `text_delta` -> `Message*` events
-- `tool_use` + `input_json_delta` -> `ToolCall*` events
-- `system.status` -> `StatusTextUpdated`
-- `task_progress` -> either `ToolCallUpdated` or a generic activity event folded into tool/runtime state
-- `AskUserQuestion`, `ExitPlanMode`, `EnterPlanMode` -> `InteractionRequested` and/or `CurrentModeChanged`
-- `result.session_id` -> `ResumeStateUpdated`
-
-### Important adapter-specific cleanup
-
-Do **not** let Claude tool names leak past the adapter.
-
----
+- assistant text / deltas -> `Message*`
+- tool use -> `ToolCall*`
+- system status -> `StatusTextUpdated`
+- blocking tool flows -> `InteractionRequested`
+- resume session id -> `ResumeStateUpdated`
 
 ## 12.2 ACP adapter
 
-Beans becomes an ACP **client** and the external agent is the ACP **agent**.
+ACP should be supported, especially for OpenCode, but as an adapter with extra backend requirements.
 
 ### Open/resume
 
-- `Open()` -> `initialize` if needed, then `session/new`
-- `Resume()` -> `session/load` if capability is supported
+- `Open()` -> `initialize` + `session/new`
+- `Resume()` -> `session/load` if supported
 
 ### Input mapping
 
 - `Send()` -> `session/prompt`
-- `SetMode()` -> `session/set_mode`
 - `Cancel()` -> `session/cancel`
-- `Respond(...)` -> return the result to the in-flight `session/request_permission`
+- `SetMode()` -> `session/set_mode`
+- `Respond(...)` -> answer pending permission requests
 
 ### Output mapping
 
-- `session/update.agent_message_chunk` -> `MessageDelta`
-- `session/update.plan` -> `PlanUpdated`
-- `session/update.tool_call` / `tool_call_update` -> `ToolCall*`
-- `current_mode_update` -> `CurrentModeChanged`
-- `available_commands_update` -> `CommandsUpdated`
+- message chunks -> `MessageDelta`
+- tool calls -> `ToolCall*`
+- mode updates -> `ModesUpdated` / current mode updates
+- permission requests -> `InteractionRequested`
 
-### Host capability mapping
+### Host requirements
 
-ACP is where `HostCapabilityRequirements` really matters.
-
-The ACP driver should likely declare:
+ACP/OpenCode likely declares:
 
 ```go
 HostCapabilityRequirements{
@@ -816,178 +550,56 @@ HostCapabilityRequirements{
 }
 ```
 
-Mapping:
-
-- `session/request_permission` should become a normal `InteractionRequested` event plus a later `Respond(...)`
-- `fs/read_text_file` / `fs/write_text_file` are ACP adapter backend plumbing
-- `terminal/*` is ACP adapter backend plumbing
-
-This is why ACP should be supported as an adapter with extra backend requirements, not as the core abstraction.
-
----
+This is backend plumbing, not the core model.
 
 ## 12.3 pi-RPC adapter
 
 ### Open/resume
 
 - spawn `pi --mode rpc`
-- `Resume()` uses adapter-owned resume state if session persistence is enabled
+- adapter-owned resume state if persistence is enabled
 
 ### Input mapping
 
-- `Send(IMMEDIATE)` -> `prompt`
-- `Send(INTERRUPT_WHEN_POSSIBLE)` -> `steer`
-- `Send(AFTER_TURN)` -> `follow_up`
+- `Send(...)` -> `prompt`
+- queueing behavior like `steer` / `follow_up` can be added later as an optional extension
 - `Cancel()` -> `abort`
-- `Invoke(compact)` -> `compact`
-- `Invoke(setModel)` -> `set_model`
-- `Invoke(setThinkingLevel)` -> `set_thinking_level`
-- `Invoke(setSessionName)` -> `set_session_name`
-- `Invoke(forkSession)` -> `fork`
+- `Respond(...)` -> answer extension UI requests when needed
 
 ### Output mapping
 
-- `message_start/update/end` -> `Message*`
-- `tool_execution_*` -> `ToolCall*`
-- `agent_start/end`, `turn_start/end` -> status/runtime events
-- `extension_ui_request` -> `InteractionRequested`
-- `get_commands` data -> `CommandsUpdated`
-- `get_state` data -> `RuntimeUpdated`
-
-### Note on pi-specific controls
-
-pi has extra power. That is fine.
-Those features should show up as optional runtime capabilities and actions, not as core requirements for every driver.
-
----
+- message streaming -> `Message*`
+- tool execution -> `ToolCall*`
+- extension UI requests -> `InteractionRequested`
+- always expose mode `act`
 
 ## 12.4 Codex MCP adapter
 
-Observed integration point:
-
-- one long-lived stdio JSONL JSON-RPC process
-- `initialize` / `notifications/initialized`
-- `tools/list`
-- `tools/call` for `codex` and `codex-reply`
-- streaming notifications via `codex/event`
-
-In Beans terms, I would model this as a dedicated Codex MCP driver.
-
 ### Open/resume
 
-- spawn one long-lived `codex mcp-server` process
-- on process startup: send `initialize`, then `notifications/initialized`
-- `Open()` -> `tools/call` with tool `codex`
-- `Resume()` within the same live process -> `tools/call` with tool `codex-reply` using stored `threadId`
-
-Important constraint:
-
-- `threadId` is only valid while the same `codex mcp-server` process remains alive
-- after process restart, old `threadId`s are not resumable
-
-So the adapter should advertise something like:
-
-- `Resume = true` for in-process/live-session continuation
-- but persistence across process restarts should be treated as **non-durable** unless Beans adds replay-based restoration
-
-In practice, I would persist both:
-
-- adapter resume state: `threadId`
-- canonical message history for possible future replay
+- spawn one long-lived `codex mcp-server`
+- initialize it
+- `Open()` -> `tools/call(name="codex")`
+- `Resume()` within the same live process -> `tools/call(name="codex-reply")`
 
 ### Input mapping
 
-- `Send(IMMEDIATE)`:
-  - if no session exists yet -> `tools/call(name="codex")`
-  - else -> `tools/call(name="codex-reply")`
-- `Cancel()`:
-  - only if we discover a reliable cancellation mechanism later; for now assume unsupported unless proven otherwise
-- `SetMode()`:
-  - unsupported
-- runtime configuration for the initial session should map from `OpenSessionRequest.Meta` / provider config into `codex` tool args such as:
-  - `cwd`
-  - `sandbox`
-  - `approval-policy`
-  - `model`
-  - `profile`
-  - `developer-instructions`
-
-### Mode mapping
-
-Codex MCP does not expose a first-class mode model.
-
-So, same stance as pi:
-
-- `currentModeId = "act"`
-- `availableModes = [{ id: "act", name: "Act", description: "Default execution mode" }]`
-- `SetMode = false`
+- `Send(...)` -> `codex` for first turn, `codex-reply` for later turns
+- `Cancel()` -> unsupported until proven otherwise
+- `SetMode()` -> unsupported
+- always expose mode `act`
 
 ### Output mapping
 
-Final authoritative result comes from the `tools/call` response:
+- final `structuredContent.content` -> `MessageCompleted`
+- `threadId` -> `ResumeStateUpdated`
+- `codex/event` deltas -> `MessageDelta`
+- useful progress events -> status/runtime updates as needed
 
-- `result.structuredContent.threadId` -> `ResumeStateUpdated`
-- `result.structuredContent.content` -> `MessageCompleted`
-- `result.isError === true` -> adapter-level error / failed turn state
+### Important constraint
 
-Streaming/progress should come from `codex/event` notifications:
-
-- `agent_message_delta` / `agent_message_content_delta` -> `MessageDelta`
-- `agent_message` -> `MessageCompleted` or final message reconciliation
-- `task_started` / `task_complete` -> session status/runtime progress events
-- `session_configured` -> runtime/config state update
-- `token_count` -> runtime usage update if we want to expose usage later
-
-There are also lower-level events like:
-
-- `raw_response_item`
-- `item_started`
-- `item_completed`
-- `user_message`
-- `mcp_startup_update`
-- `mcp_startup_complete`
-
-My recommendation is to keep the first adapter conservative:
-
-- map only clearly useful message/progress events into the canonical reducer
-- store the rest in provider metadata if needed
-- avoid overfitting the core model to Codex-specific event taxonomy
-
-### Capabilities mapping
-
-What Codex MCP appears to support well:
-
-- prompt turns
-- streaming text output
-- in-process session continuation via `threadId`
-
-What it does **not** appear to support directly in the current observed contract:
-
-- generic mode switching
-- Beans-hosted permission requests
-- Beans-hosted file system callbacks
-- Beans-hosted terminal callbacks
-- durable session resume across process restarts
-
-So I would initially advertise a narrower capability set than ACP/pi.
-
-### Persistence strategy
-
-This adapter is exactly why the abstraction needs to separate:
-
-1. canonical Beans history persistence
-2. adapter-native resume state
-
-Because Codex MCP's native resume handle (`threadId`) is ephemeral.
-
-If Beans later wants durable restoration for Codex MCP, the likely strategy is:
-
-- persist canonical conversation history
-- start a fresh `codex` session on restart
-- replay prior turns into that new session
-- capture the new `threadId`
-
-That replay logic belongs inside the Codex adapter, not the core API.
+`threadId` is process-local.
+So canonical Beans persistence matters more than native resume durability.
 
 ---
 
@@ -995,101 +607,90 @@ That replay logic belongs inside the Codex adapter, not the core API.
 
 The frontend should stop assuming:
 
-- there are exactly two modes
-- approving means “set plan=false, act=true, then send `yes, proceed`”
-- `pendingInteraction` only means `EXIT_PLAN` or `ASK_USER`
-- compaction is always a literal `/compact` message
+- there are exactly two modes in every runtime
+- pending interaction only means Claude plan exit or ask-user
+- compaction is always a special command
+- every runtime exposes the same control surface
 
-Instead it should become:
+Instead it should:
 
-1. render `availableModes`
-2. render `pendingRequests`
-3. render `toolCalls`
-4. render `plan`
-5. render `commands`
-6. enable controls based on `capabilities` and `runtimeCapabilities`
+1. render current mode and available modes
+2. render pending requests
+3. render messages
+4. render tool calls
+5. enable controls based on session capabilities
 
-This will let the same UI handle Claude, ACP agents, and pi with fewer special cases.
+That is enough for the minimal generic API.
 
 ---
 
 ## 14. Recommended migration strategy
 
-## Phase 1 — Introduce the canonical core without changing behavior
+## Phase 1 — Introduce the minimal canonical core
 
 - add `agentcore` types and reducer
 - wrap current Claude code in a `claude` driver
-- keep current GraphQL API, but populate it from the canonical reducer
+- keep current GraphQL API, but populate it from the new reducer
 
-Goal: prove the architecture without changing the UI much.
+Goal: prove the minimal architecture without big UI churn.
 
-## Phase 2 — Replace Claude-shaped state with generic state
+## Phase 2 — Replace Claude-shaped session state
 
 - add `currentModeId` / `availableModes`
 - add `pendingRequests[]`
 - add `toolCalls[]`
-- add `capabilities` / `runtimeCapabilities`
-- keep old fields temporarily for compatibility
+- keep compatibility shims for old GraphQL fields temporarily
 
-Goal: make the API generic enough for another driver.
+Goal: make the API generic enough for a second driver.
 
-## Phase 3 — Add ACP driver
+## Phase 3 — Add ACP/OpenCode driver
 
-- implement ACP client transport and session management
-- implement ACP backend plumbing based on `HostCapabilityRequirements` for permission / fs / terminal
-- map ACP events into canonical reducer
-- map ACP permission requests into the normal interaction-state flow
+- implement ACP transport/session management
+- implement ACP backend plumbing behind `HostCapabilityRequirements`
+- map ACP permission requests into interaction state
 
-Goal: prove the abstraction can support an editor-agent protocol without making ACP the core model.
+Goal: support OpenCode without making ACP the core model.
 
 ## Phase 4 — Add pi-RPC driver
 
 - implement `pi --mode rpc` adapter
-- wire queue delivery modes, compaction, model/thinking controls, extension UI requests
+- map message/tool/interaction flows into the reducer
+- add richer delivery/runtime features only if the UI actually needs them
 
-Goal: prove the abstraction also handles a richer headless RPC agent.
+## Phase 5 — Add Codex MCP driver
 
-## Phase 5 — Remove legacy Claude-specific fields
+- implement `codex mcp-server` adapter
+- handle process-local thread resume state
+- rely on canonical Beans persistence for long-term continuity
+
+## Phase 6 — Remove legacy Claude-shaped fields
 
 - delete `planMode`, `actMode`, `pendingInteraction`, `subagentActivities` once UI is migrated
-- keep provider-specific metadata only in `_meta` / `meta`
 
 ---
 
-## 15. Concrete recommendations
+## 15. Concrete implementation recommendations
 
-If you want the shortest path that still scales, I would do these exact things first:
+If I were starting implementation now, I would do these first:
 
-1. **Rename the current `agent.Session` model into a canonical session state model**
-   - stop treating it as the Claude runtime state directly
+1. **Rename the current `agent.Session` model into a canonical reducer-owned session state**
 2. **Introduce `DriverKind` + `ResumeState` now**
-   - even before ACP/pi are implemented
 3. **Replace `planMode`/`actMode` with `CurrentModeID` + `AvailableModes` internally**
-   - keep compatibility shims for the current GraphQL API temporarily
-4. **Replace `PendingInteraction` with a generic `InteractionRequest`**
-   - Claude maps into it today
-   - ACP/pi will map naturally later
+4. **Replace `PendingInteraction` with generic `InteractionRequest` state**
 5. **Add `ToolCall` as a first-class state object**
-   - do not treat tool activity as just chat messages
-6. **Make `compact`, `setModel`, `setThinkingLevel`, etc. runtime actions**
-   - not bespoke GraphQL mutations per provider
-7. **Make the reducer own the UI state**
-   - adapters should only emit normalized events
+6. **Keep the base driver interface small**
+7. **Do not add plans/commands/runtime actions until really needed**
 
 ---
 
-## 16. Open questions to resolve during implementation
+## 16. Open questions
 
-1. **Should Beans persist canonical history, native history, or both?**
-   - I would persist canonical history + opaque resume state.
-2. **Should GraphQL expose raw provider metadata?**
-   - probably yes via optional `meta: JSON`, but keep it non-essential.
-3. **Do we need multi-session multiplexing inside one process now?**
-   - not in the core API. Hide it inside the driver.
-4. **Should commands and actions both exist?**
-   - yes. They solve different problems.
-5. **Should terminal/bash be unified?**
-   - yes at the UI/state level as executable activity, but keep provider-specific actions if needed.
+A few questions remain, but the reduced plan narrows them a lot:
+
+1. Should tool calls be in v1, or added immediately after the minimal migration?
+2. How much raw provider metadata should GraphQL expose, if any?
+3. How should canonical history be serialized once tool calls become first-class?
+4. When pi/ACP land, which richer control surfaces actually need to be promoted into the main API?
 
 ---
 
@@ -1097,7 +698,7 @@ If you want the shortest path that still scales, I would do these exact things f
 
 The right abstraction for Beans is:
 
-> **A Beans-native, event-driven agent session model with capability-based controls and driver adapters for Claude, ACP, and pi-RPC.**
+> **A small Beans-native, event-driven session model with pluggable drivers, first-class interaction state, and optional backend host requirements for ACP-like runtimes.**
 
 Not:
 
@@ -1108,6 +709,6 @@ Not:
 
 If you implement only one thing first, make it this:
 
-> **Normalize all agent runtimes into one reducer-fed event model, and make modes/interactions/tool-calls generic.**
+> **Introduce the reducer-owned minimal session model and migrate Claude into it first.**
 
-That is the move that will unlock the rest.
+That is the step that unlocks everything else.
