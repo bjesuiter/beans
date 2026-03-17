@@ -11,6 +11,38 @@ Goals:
 
 ---
 
+## 0. Stack position
+
+```mermaid
+flowchart TD
+    UI[Web UI\nSvelte components + stores]
+    GQL[GraphQL API\nqueries / mutations / subscriptions]
+    MGR[Beans agent manager\nsession store + reducer + pub/sub]
+    SPEC[Beans agent abstraction\nDriver / LiveSession / SessionState / Event]
+    CLAUDE[Claude driver]
+    PI[pi RPC driver]
+    CODEX[Codex MCP driver]
+    ACP[ACP / OpenCode driver]
+
+    UI --> GQL
+    GQL --> MGR
+    MGR --> SPEC
+    SPEC --> CLAUDE
+    SPEC --> PI
+    SPEC --> CODEX
+    SPEC --> ACP
+```
+
+Reading it top to bottom:
+
+- the Web UI only knows the GraphQL session model
+- GraphQL talks to the Beans agent manager
+- the manager owns the canonical session state and reduces driver events into it
+- the abstraction is the boundary between Beans core and concrete agent runtimes
+- each concrete driver adapts one external protocol/runtime into the same Beans model
+
+---
+
 ## 1. Design rules
 
 1. Beans owns the session model.
