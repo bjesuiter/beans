@@ -51,7 +51,7 @@ flowchart TD
 - `internal/agent/store.go`
 - `meta/bjesuiter/01-research/claude-code-touchpoints.md`
 
-## Assessment against `meta/bjesuiter/03-spec/beans-agent-spec.md`
+## Assessment against `meta/bjesuiter/04-spec/beans-agent-spec.md`
 
 **Verdict:** not solved by the current spec.
 

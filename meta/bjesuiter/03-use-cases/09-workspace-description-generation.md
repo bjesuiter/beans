@@ -48,7 +48,7 @@ flowchart TD
 - `internal/agent/describe.go`
 - `internal/worktree/*`
 
-## Assessment against `meta/bjesuiter/03-spec/beans-agent-spec.md`
+## Assessment against `meta/bjesuiter/04-spec/beans-agent-spec.md`
 
 **Verdict:** not solved by the current spec.
 

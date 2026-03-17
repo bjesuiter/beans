@@ -67,7 +67,7 @@ flowchart TD
 - `internal/agent/types.go`
 - `internal/graph/schema.resolvers.go`
 
-## Assessment against `meta/bjesuiter/03-spec/beans-agent-spec.md`
+## Assessment against `meta/bjesuiter/04-spec/beans-agent-spec.md`
 
 **Verdict:** directly solved and strongly simplified.
 

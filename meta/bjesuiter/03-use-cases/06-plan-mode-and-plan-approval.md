@@ -85,7 +85,7 @@ flowchart TD
 - `frontend/src/lib/components/PendingInteraction.svelte`
 - `internal/graph/schema.graphqls`
 
-## Assessment against `meta/bjesuiter/03-spec/beans-agent-spec.md`
+## Assessment against `meta/bjesuiter/04-spec/beans-agent-spec.md`
 
 **Verdict:** partly solved, with an important gap around plan-specific UX.
 

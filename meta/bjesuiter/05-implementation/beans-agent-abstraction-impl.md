@@ -1,6 +1,6 @@
 # Beans agent refactor implementation plan
 
-Spec: `meta/bjesuiter/03-spec/beans-agent-spec.md`
+Spec: `meta/bjesuiter/04-spec/beans-agent-spec.md`
 
 ## Non-negotiable constraint
 

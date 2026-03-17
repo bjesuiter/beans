@@ -62,7 +62,7 @@ flowchart TD
 - `internal/graph/schema.graphqls`
 - `frontend/src/lib/components/AgentChat.svelte`
 
-## Assessment against `meta/bjesuiter/03-spec/beans-agent-spec.md`
+## Assessment against `meta/bjesuiter/04-spec/beans-agent-spec.md`
 
 **Verdict:** mostly simplified, but not fully solved.
 

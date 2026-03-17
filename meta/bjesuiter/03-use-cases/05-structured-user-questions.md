@@ -70,7 +70,7 @@ flowchart TD
 - `frontend/src/lib/agentChat.svelte.ts`
 - `internal/commands/serve.go`
 
-## Assessment against `meta/bjesuiter/03-spec/beans-agent-spec.md`
+## Assessment against `meta/bjesuiter/04-spec/beans-agent-spec.md`
 
 **Verdict:** directly solved and substantially simplified.
 

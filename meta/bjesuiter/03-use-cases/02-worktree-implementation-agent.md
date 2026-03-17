@@ -66,7 +66,7 @@ flowchart TD
 - `frontend/src/lib/components/AgentChat.svelte`
 - `frontend/src/lib/components/AgentComposer.svelte`
 
-## Assessment against `meta/bjesuiter/03-spec/beans-agent-spec.md`
+## Assessment against `meta/bjesuiter/04-spec/beans-agent-spec.md`
 
 **Verdict:** significantly simplified.
 

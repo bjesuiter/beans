@@ -65,7 +65,7 @@ flowchart TD
 - `internal/graph/agent_helpers.go`
 - `frontend/src/lib/components/AgentChat.svelte`
 
-## Assessment against `meta/bjesuiter/03-spec/beans-agent-spec.md`
+## Assessment against `meta/bjesuiter/04-spec/beans-agent-spec.md`
 
 **Verdict:** mostly solved, though some subagent detail remains convention-based.
 
