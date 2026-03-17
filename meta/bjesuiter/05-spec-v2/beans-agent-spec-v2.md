@@ -2,7 +2,7 @@
 
 A minimal Beans-native agent abstraction built around **sessions, messages, and frames**.
 
-Companion note: see `./agent-spec-concepts.md` for the reduced concept model and the Beans-vs-driver layering rules.
+Companion note: see `./agent-spec-v2-concepts.md` for the reduced concept model and the Beans-vs-driver layering rules.
 
 ## Goals
 
