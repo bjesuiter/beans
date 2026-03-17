@@ -65,3 +65,31 @@ flowchart TD
 - `internal/agent/types.go`
 - `frontend/src/lib/components/AgentChat.svelte`
 - `frontend/src/lib/components/AgentComposer.svelte`
+
+## Assessment against `meta/bjesuiter/03-spec/beans-agent-spec.md`
+
+**Verdict:** significantly simplified.
+
+This is one of the use-cases the new spec helps most.
+
+The spec would simplify it by:
+
+- making the worktree chat a generic `SessionState` instead of a Claude-shaped session
+- moving runtime differences behind a driver boundary
+- representing messages, status text, tool calls, interactions, and resume state in one Beans-native model
+- letting the UI render the same session shape regardless of whether the runtime is Claude, pi, Codex, or ACP
+
+It also fits the worktree flow well because the spec already includes:
+
+- `WorkingDir` on open/resume
+- driver-owned resume state
+- tool-call events for streamed work activity
+- capability flags so the UI can adapt to different runtimes
+
+What remains outside the spec:
+
+- bean/worktree-specific prompts and safety rules
+- Beans-specific diff derivation from writes
+- product decisions about how much tool detail to surface
+
+So the spec does not remove all worktree-specific behavior, but it does solve the main architectural problem: the worktree implementation agent no longer has to be Claude-shaped internally.

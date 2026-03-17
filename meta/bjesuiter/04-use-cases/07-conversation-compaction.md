@@ -50,3 +50,27 @@ flowchart TD
 - `internal/agent/claude.go`
 - `internal/agent/store.go`
 - `meta/bjesuiter/01-research/claude-code-touchpoints.md`
+
+## Assessment against `meta/bjesuiter/03-spec/beans-agent-spec.md`
+
+**Verdict:** not solved by the current spec.
+
+The spec explicitly leaves operational extras like compaction out of the core abstraction for now:
+
+- `Send(...)`, `SetMode(...)`, and `Respond(...)` are core
+- compaction is listed under likely future extensions / direct runtime actions
+
+That means the new spec does **not** yet provide a first-class generic replacement for the current `/compact` behavior.
+
+What the spec would still improve indirectly:
+
+- the UI would no longer need to be Claude-shaped in other areas
+- compaction could later be added as an optional runtime action instead of a magic text message
+- attachment pruning could remain a Beans-side post-action concern
+
+But as written today, this use-case still needs either:
+
+- a driver-specific convention, or
+- a future extension to the spec
+
+So compaction remains one of the clearest examples of functionality that is intentionally out of scope in the current Beans agent spec.

@@ -86,3 +86,23 @@ flowchart TD
 - `internal/agent/claude.go`
 - `internal/agent/store.go`
 - `frontend/src/lib/agentChat.svelte.ts`
+
+## Assessment against `meta/bjesuiter/03-spec/beans-agent-spec.md`
+
+**Verdict:** partially solved and moderately simplified.
+
+The new spec helps by moving message sending behind a generic session API:
+
+- the UI would send normal Beans `UserInput` through `Send(...)`
+- session capabilities can declare whether a driver supports images via `SendImages`
+- the Claude driver would be responsible for translating Beans input into Anthropic/Claude wire format
+
+That means the UI and manager would no longer need to think in Claude `stream-json` message envelopes or Anthropic image blocks.
+
+What the spec does **not** fully define yet:
+
+- the exact generic content-block/input shape for sent messages
+- attachment persistence conventions
+- attachment serving and cleanup rules
+
+So the spec clearly simplifies the API boundary and removes Claude-specific transport assumptions, but Beans still needs additional concrete design for the cross-driver message payload model and for attachment storage behavior.

@@ -64,3 +64,25 @@ flowchart TD
 - `internal/agent/types.go`
 - `internal/graph/agent_helpers.go`
 - `frontend/src/lib/components/AgentChat.svelte`
+
+## Assessment against `meta/bjesuiter/03-spec/beans-agent-spec.md`
+
+**Verdict:** mostly solved, though some subagent detail remains convention-based.
+
+The spec gives this use-case a much better generic home:
+
+- `StatusTextUpdated` replaces Claude-specific `system.status`
+- `ToolCallStarted` / `ToolCallUpdated` / `ToolCallCompleted` provide a generic stream for active work
+- `ToolCalls` remain in `SessionState`, specifically because Beans already surfaces tool-like activity and progress
+
+That means the UI can render live activity from generic Beans events instead of from Claude-only event names like `task_progress`.
+
+The remaining gap is that the current UI talks about "subagents," while the spec talks more generally about tool calls and status updates. In practice this is probably good enough for the initial refactor, but if Beans later wants a richer distinction between:
+
+- top-level tool calls
+- delegated subagents
+- background tasks
+
+then the model may need a future refinement.
+
+So the new spec largely solves the Claude coupling here, even if some of the exact semantics of "subagent activity" stay a matter of driver mapping and UI convention.

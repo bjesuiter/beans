@@ -47,3 +47,29 @@ flowchart TD
 - `internal/commands/serve.go`
 - `internal/agent/describe.go`
 - `internal/worktree/*`
+
+## Assessment against `meta/bjesuiter/03-spec/beans-agent-spec.md`
+
+**Verdict:** not solved by the current spec.
+
+This use-case sits outside the session abstraction that the new spec defines.
+
+The spec covers:
+
+- opening/resuming live agent sessions
+- streaming events into canonical session state
+- mode changes, interactions, and resume behavior
+
+But workspace description generation is different:
+
+- it is a one-off metadata generation call
+- it does not use the persistent session model
+- it does not go through the live chat event flow
+- it currently runs as a separate helper invocation
+
+The spec may still help indirectly by making the main chat integration cleaner and easier to swap, but it does not define a replacement for this helper-style "generate me a short description" operation.
+
+So if Beans wants this capability to become runtime-agnostic too, it would likely need either:
+
+- a separate abstraction for utility/model calls, or
+- a small driver-adjacent helper interface outside the core live-session spec

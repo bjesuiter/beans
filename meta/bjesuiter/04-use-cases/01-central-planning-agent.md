@@ -61,3 +61,22 @@ flowchart TD
 - `internal/agent/claude.go`
 - `internal/graph/schema.graphqls`
 - `frontend/src/lib/components/AgentChat.svelte`
+
+## Assessment against `meta/bjesuiter/03-spec/beans-agent-spec.md`
+
+**Verdict:** mostly simplified, but not fully solved.
+
+The new spec would cleanly remove most of the Claude-specific runtime coupling in this use-case:
+
+- the central planner would become just another Beans session with a chosen `DriverKind`
+- the manager would own canonical session state instead of Claude-shaped state
+- `AskUserQuestion`-style prompts would map to generic `PendingRequests` plus `Respond(...)`
+- the UI could stay generic and stop depending on Claude-specific tool names
+
+What the spec does **not** solve by itself is the planning policy for the central agent:
+
+- the central planning prompt still has to exist
+- Beans still has to decide that `__central__` is a planning/coordinator session
+- worktree-specific instructions like using `startWork` remain product logic above the abstraction
+
+So this use-case becomes much cleaner at the runtime/protocol layer, but its planning behavior is still a Beans-level convention, not something the spec replaces.

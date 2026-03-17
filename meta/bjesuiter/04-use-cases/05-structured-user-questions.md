@@ -69,3 +69,33 @@ flowchart TD
 - `frontend/src/lib/components/PendingInteraction.svelte`
 - `frontend/src/lib/agentChat.svelte.ts`
 - `internal/commands/serve.go`
+
+## Assessment against `meta/bjesuiter/03-spec/beans-agent-spec.md`
+
+**Verdict:** directly solved and substantially simplified.
+
+This is another use-case the new spec addresses head-on.
+
+The spec replaces the Claude-specific `AskUserQuestion` flow with a generic interaction model:
+
+- drivers emit `InteractionRequested`
+- Beans stores requests in `PendingRequests`
+- the UI renders those requests from session state
+- the user's answer goes back through `Respond(requestID, reply)`
+
+It also defines interaction kinds that map closely to the current needs:
+
+- `select`
+- `multi_select`
+- `text_input`
+- `confirm`
+- `editor`
+- `custom`
+
+That removes the biggest current coupling points:
+
+- no hard dependency on the tool name `AskUserQuestion`
+- no dependency on Claude's tool-input JSON schema
+- no need to overload ordinary user messages as implicit interaction replies
+
+Implementation work remains in the drivers, because each runtime still has to map its native question/approval mechanism into Beans interactions. But architecturally, this use-case is much cleaner under the new spec.

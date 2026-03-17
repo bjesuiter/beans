@@ -84,3 +84,32 @@ flowchart TD
 - `frontend/src/lib/components/AgentChat.svelte`
 - `frontend/src/lib/components/PendingInteraction.svelte`
 - `internal/graph/schema.graphqls`
+
+## Assessment against `meta/bjesuiter/03-spec/beans-agent-spec.md`
+
+**Verdict:** partly solved, with an important gap around plan-specific UX.
+
+The spec clearly improves the **mode** part of this use-case:
+
+- `CurrentModeID` and `AvailableModes` replace `planMode` / `actMode`
+- `SetMode(...)` becomes the generic way to change modes
+- drivers can expose native modes when they have them, or only `act` when they do not
+- the UI no longer has to assume Claude's exact flag model
+
+That is a big simplification for the current Claude-only wiring.
+
+However, the spec does **not** fully solve the broader plan workflow yet:
+
+- plan documents are not a first-class core concept
+- `/\.claude/plans/*.md` discovery is not represented in the spec
+- approval of a generated plan is not modeled as a dedicated built-in flow
+- the spec explicitly says operational extras and richer plan behavior can be added later
+
+Some of the current behavior could still be represented generically:
+
+- exit-plan approval could become a `confirm`, `editor`, or `custom` interaction
+- plan content could be carried as interaction payload data
+
+But that is a mapping convention, not a fully specified core feature.
+
+So the spec solves the Claude-shaped mode booleans, but only partially addresses the richer plan-review-and-approval workflow that Beans currently has.

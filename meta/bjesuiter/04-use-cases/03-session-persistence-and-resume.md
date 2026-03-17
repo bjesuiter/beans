@@ -66,3 +66,31 @@ flowchart TD
 - `internal/agent/claude.go`
 - `internal/agent/types.go`
 - `internal/graph/schema.resolvers.go`
+
+## Assessment against `meta/bjesuiter/03-spec/beans-agent-spec.md`
+
+**Verdict:** directly solved and strongly simplified.
+
+This use-case is explicitly addressed by the new spec.
+
+The spec improves it by:
+
+- replacing the Claude-only `SessionID` concept with `ResumeState`
+- storing `DriverKind` alongside adapter-owned opaque resume data
+- making resume a first-class part of the driver interface via `Resume(...)`
+- keeping canonical session state in Beans instead of embedding Claude assumptions into persistence
+
+This is especially important because different runtimes resume differently:
+
+- Claude uses a resumable session ID
+- pi may use a session file or session ID
+- Codex may use a thread ID
+- ACP may use an ACP session ID
+
+The main remaining work is implementation detail, not design uncertainty:
+
+- versioning persisted conversation/meta entries
+- migrating old Claude-only data lazily
+- deciding exactly how canonical history and opaque resume state are serialized
+
+So compared with the old model, this use-case is not just simplified; it is one of the clearest problems the new spec was designed to solve.
