@@ -56,7 +56,7 @@ without requiring a large set of top-level interface methods.
 
 ---
 
-## 2. Primitive: Agent
+## 2. Primitive: Agent (Agent Driver)
 
 An **Agent** is the runtime adapter.
 

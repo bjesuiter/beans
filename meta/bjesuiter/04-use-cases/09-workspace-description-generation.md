@@ -6,6 +6,9 @@ Beans uses Claude for a second, separate use-case outside the main chat runtime:
 
 The goal is to summarize the first user message into a compact label for the workspace sidebar.
 
+## Human Update 
+- 
+
 ## How Beans uses Claude for it
 
 1. `agentMgr.SetOnFirstUserMessage(...)` is registered in `internal/commands/serve.go`.

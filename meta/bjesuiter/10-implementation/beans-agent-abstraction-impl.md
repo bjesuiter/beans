@@ -6,7 +6,7 @@ Spec: `meta/bjesuiter/04-spec/beans-agent-spec.md`
 
 **All current functionality must persist during this refactor.**
 
-## Decision
+## Decisios
 
 Use a **strangler refactor**:
 
